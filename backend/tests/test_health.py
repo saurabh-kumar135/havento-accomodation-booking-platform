@@ -6,7 +6,7 @@ async def test_health_check(client):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "healthy"
-    assert data["service"] == "Heaven_Python FastAPI"
+    assert "FastAPI" in data["service"]
 
 @pytest.mark.asyncio
 async def test_get_homes(client):

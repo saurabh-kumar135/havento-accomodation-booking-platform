@@ -41,8 +41,8 @@ yarn-debug.log*
 yarn-error.log*
 
 # Uploads
-backend/app/static/uploads/*
-!backend/app/static/uploads/.gitkeep
+backend/static/uploads/*
+!backend/static/uploads/.gitkeep
 
 # IDEs
 .vscode/

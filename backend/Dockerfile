@@ -22,7 +22,7 @@ RUN pip install --upgrade pip && \
 COPY . .
 
 # Create uploads directory and non-root user
-RUN mkdir -p /app/app/static/uploads && \
+RUN mkdir -p /app/static/uploads && \
     useradd -m -u 1000 appuser && \
     chown -R appuser:appuser /app
 
@@ -33,4 +33,4 @@ EXPOSE 3009
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:3009/api/health || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3009"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "3009"]
