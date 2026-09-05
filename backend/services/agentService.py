@@ -224,8 +224,8 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], user_id: Optional[s
                 "destination": loc,
                 "category": cat,
                 "guests": gst,
-                "fairMarketRate": f"${prediction['recommended_price']}/night",
-                "recommendedRange": f"${prediction['min_competitive_price']} - ${prediction['max_premium_price']}",
+                "fairMarketRate": f"₹{prediction['recommended_price']:,.0f}/night",
+                "recommendedRange": f"₹{prediction['min_competitive_price']:,.0f} - ₹{prediction['max_premium_price']:,.0f}",
                 "demandTier": prediction["demand_tier"],
                 "projectedOccupancy": f"{prediction['projected_occupancy_rate']}%",
                 "keyDrivers": [d["factor"] + " (" + d["impact"] + ")" for d in prediction["value_drivers"]]

@@ -13,12 +13,11 @@ async def test_unit_predict_optimal_price():
         is_weekend=1
     )
     
-    assert rec["recommended_price"] > 50.0
+    assert rec["recommended_price"] > 500.0
     assert rec["min_competitive_price"] < rec["recommended_price"]
     assert rec["max_premium_price"] > rec["recommended_price"]
     assert rec["demand_tier"] == "High Demand"
     assert len(rec["value_drivers"]) > 0
-    assert rec["model_confidence"]["r2_accuracy"] > 0.80
 
 @pytest.mark.asyncio
 async def test_api_predict_pricing(client):
@@ -26,7 +25,7 @@ async def test_api_predict_pricing(client):
         "location": "Taharpur",
         "category": "Trending",
         "guests": 3,
-        "rating": 4.5,
+        "rating": 8.0,
         "amenities": ["WiFi", "Free Parking"],
         "month": 5,
         "is_weekend": 0
@@ -35,8 +34,8 @@ async def test_api_predict_pricing(client):
     assert response.status_code == 200
     data = response.json()
     assert data["success"] is True
-    assert data["recommended_price"] > 0
-    assert data["currency"] == "USD"
+    assert data["recommended_price"] > 500
+    assert data["currency"] == "INR"
     assert "projected_occupancy_rate" in data
 
 @pytest.mark.asyncio

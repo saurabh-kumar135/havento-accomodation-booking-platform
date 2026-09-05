@@ -11,8 +11,7 @@ from services.pricingService import (
     predict_optimal_price,
     compute_host_revenue_metrics,
     get_pricing_model,
-    LOCATION_BASE,
-    AMENITY_VALUATION
+    REAL_LOCATION_BASELINES_INR
 )
 
 logger = logging.getLogger("havento_python.analyticsController")
@@ -71,14 +70,14 @@ async def get_home_pricing_analysis(home_id: str):
     percent_diff = round((diff / max(1.0, current_price)) * 100, 1)
     
     status_label = "optimal"
-    if diff > 10:
+    if diff > 500:
         status_label = "underpriced"
-        advice = f"Your listing is priced ${diff:.2f} below market demand. Raising price towards ${rec_price:.2f} could yield higher revenue without sacrificing occupancy."
-    elif diff < -10:
+        advice = f"Your listing is priced ₹{diff:,.0f} below market demand. Raising price towards ₹{rec_price:,.0f} could maximize earnings."
+    elif diff < -500:
         status_label = "overpriced"
-        advice = f"Your listing is priced ${abs(diff):.2f} above market benchmark. Lowering slightly towards ${rec_price:.2f} can substantially boost booking conversion."
+        advice = f"Your listing is priced ₹{abs(diff):,.0f} above market benchmark. Adjusting towards ₹{rec_price:,.0f} can boost booking frequency."
     else:
-        advice = "Your listing is competitively priced within the optimal market demand sweet spot."
+        advice = "Your listing is competitively priced within the optimal market demand range."
 
     return {
         "success": True,
@@ -88,14 +87,15 @@ async def get_home_pricing_analysis(home_id: str):
         "category": home.category,
         "current_price": current_price,
         "recommended_price": rec_price,
+        "currency": "INR",
+        "currency_symbol": "₹",
         "price_difference": diff,
         "percent_variance": percent_diff,
         "pricing_status": status_label,
         "strategic_advice": advice,
         "demand_tier": pricing_rec["demand_tier"],
         "projected_occupancy_rate": pricing_rec["projected_occupancy_rate"],
-        "value_drivers": pricing_rec["value_drivers"],
-        "model_confidence": pricing_rec["model_confidence"]
+        "value_drivers": pricing_rec["value_drivers"]
     }
 
 async def get_host_metrics(user: User = Depends(get_current_user)):
@@ -118,17 +118,20 @@ async def get_market_intelligence():
     _, metadata = get_pricing_model()
     return {
         "success": True,
-        "supported_markets": list(LOCATION_BASE.keys()),
-        "premium_amenities": list(AMENITY_VALUATION.keys()),
+        "currency": "INR",
+        "currency_symbol": "₹",
+        "supported_markets": [
+            "Udaipur", "Mumbai", "Jaipur", "Darjeeling", "Ranthambore",
+            "Shimla", "Jaisalmer", "Bangalore", "Kerala", "Delhi", "Goa", "Taharpur"
+        ],
         "model_architecture": {
             "algorithm": metadata.get("model_type", "RandomForestRegressor") if metadata else "RandomForestRegressor",
-            "accuracy_r2": metadata.get("metrics", {}).get("r2_score", 0.85) if metadata else 0.85,
-            "mae_variance": metadata.get("metrics", {}).get("mae", 27.58) if metadata else 27.58,
-            "mape_percent": metadata.get("metrics", {}).get("mape_percent", 10.23) if metadata else 10.23
+            "accuracy_r2": metadata.get("metrics", {}).get("r2_score", 0.90) if metadata else 0.90,
+            "mae_inr": metadata.get("metrics", {}).get("mae_inr", 2039) if metadata else 2039
         },
         "market_averages": {
-            "national_adr": 92.50,
-            "peak_season_occupancy": 82.4,
-            "off_peak_occupancy": 58.1
+            "national_adr_inr": 7250,
+            "peak_season_occupancy": 84.5,
+            "off_peak_occupancy": 58.0
         }
     }
