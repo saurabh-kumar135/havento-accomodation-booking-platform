@@ -15,7 +15,8 @@ from routes import (
     passwordResetRoutes,
     storeRouter,
     hostRouter,
-    agentRouter
+    agentRouter,
+    analyticsRouter
 )
 
 # Setup logging
@@ -121,6 +122,7 @@ app.include_router(passwordResetRoutes.router, prefix="/api")
 app.include_router(storeRouter.router, prefix="/api")
 app.include_router(hostRouter.router, prefix="/api")
 app.include_router(agentRouter.router, prefix="/api")
+app.include_router(analyticsRouter.router, prefix="/api")
 
 # Global Exception Handler
 @app.exception_handler(Exception)

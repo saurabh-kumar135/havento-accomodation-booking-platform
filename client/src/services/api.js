@@ -61,4 +61,10 @@ export const deleteHome = (homeId) => api.post(`/api/host/delete-home/${homeId}`
 // AI Agent
 export const chatAgent = (message, chatHistory = []) => api.post('/api/agent/chat', { message, chatHistory });
 
+// Revenue Intelligence & ML Dynamic Pricing
+export const predictDynamicPrice = (data) => api.post('/api/analytics/pricing/predict', data);
+export const getHomePricingAnalysis = (homeId) => api.get(`/api/analytics/pricing/home/${homeId}`);
+export const getHostRevenueMetrics = () => api.get('/api/analytics/host/metrics');
+export const getMarketOverview = () => api.get('/api/analytics/market/overview');
+
 export default api;

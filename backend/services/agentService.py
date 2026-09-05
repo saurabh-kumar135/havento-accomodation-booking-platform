@@ -89,6 +89,23 @@ TOOLS = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "predictDynamicPricing",
+            "description": "Predict fair-market dynamic nightly price and demand drivers for any destination or property using our Machine Learning model.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string", "description": "City or destination (e.g. Goa, Taharpur, Mumbai, Delhi)"},
+                    "category": {"type": "string", "description": "Property category (e.g. Villa, Trending, Apartment, Cabin, Beachfront)"},
+                    "guests": {"type": "integer", "description": "Number of guests (e.g. 2, 4, 6)"},
+                    "amenities": {"type": "array", "items": {"type": "string"}, "description": "List of amenities (e.g. WiFi, Swimming Pool, Air Conditioning)"}
+                },
+                "required": ["location"],
+            },
+        },
+    },
 ]
 
 async def execute_tool(tool_name: str, args: Dict[str, Any], user_id: Optional[str] = None) -> Dict[str, Any]:
@@ -194,6 +211,24 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], user_id: Optional[s
                     }
                     for b in bookings
                 ],
+            }
+
+        elif tool_name == "predictDynamicPricing":
+            from services.pricingService import predict_optimal_price
+            loc = args.get("location", "Goa")
+            cat = args.get("category", "Trending")
+            gst = args.get("guests", 2)
+            amen = args.get("amenities", [])
+            prediction = predict_optimal_price(location=loc, category=cat, guests=gst, amenities=amen)
+            return {
+                "destination": loc,
+                "category": cat,
+                "guests": gst,
+                "fairMarketRate": f"${prediction['recommended_price']}/night",
+                "recommendedRange": f"${prediction['min_competitive_price']} - ${prediction['max_premium_price']}",
+                "demandTier": prediction["demand_tier"],
+                "projectedOccupancy": f"{prediction['projected_occupancy_rate']}%",
+                "keyDrivers": [d["factor"] + " (" + d["impact"] + ")" for d in prediction["value_drivers"]]
             }
 
     except Exception as e:

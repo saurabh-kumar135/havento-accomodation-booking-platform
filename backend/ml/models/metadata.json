@@ -1,0 +1,74 @@
+{
+  "model_type": "RandomForestRegressor",
+  "n_estimators": 120,
+  "max_depth": 16,
+  "metrics": {
+    "r2_score": 0.8496,
+    "rmse": 36.01,
+    "mae": 27.58,
+    "mape_percent": 10.23
+  },
+  "supported_locations": [
+    "Taharpur",
+    "Delhi",
+    "Goa",
+    "Mumbai",
+    "Bangalore",
+    "Jaipur",
+    "Manali",
+    "Rishikesh",
+    "Udaipur",
+    "Shimla"
+  ],
+  "supported_categories": [
+    "Trending",
+    "Villa",
+    "Apartment",
+    "Cabin",
+    "Beachfront",
+    "Mountain View",
+    "Luxury Suite",
+    "Studio",
+    "Heritage Home"
+  ],
+  "supported_amenities": [
+    "WiFi",
+    "Swimming Pool",
+    "Air Conditioning",
+    "Fully Equipped Kitchen",
+    "Free Parking",
+    "Gym",
+    "Hot Tub",
+    "Ocean View",
+    "Dedicated Workspace",
+    "Pet Friendly",
+    "Balcony",
+    "BBQ Grill"
+  ],
+  "location_baselines": {
+    "Goa": 110.0,
+    "Mumbai": 130.0,
+    "Udaipur": 115.0,
+    "Delhi": 95.0,
+    "Bangalore": 90.0,
+    "Jaipur": 85.0,
+    "Manali": 80.0,
+    "Shimla": 78.0,
+    "Rishikesh": 70.0,
+    "Taharpur": 55.0
+  },
+  "amenity_valuations": {
+    "Swimming Pool": 38.0,
+    "Hot Tub": 28.0,
+    "Ocean View": 45.0,
+    "Balcony": 15.0,
+    "BBQ Grill": 12.0,
+    "Gym": 14.0,
+    "Air Conditioning": 18.0,
+    "Fully Equipped Kitchen": 16.0,
+    "Dedicated Workspace": 10.0,
+    "WiFi": 8.0,
+    "Free Parking": 10.0,
+    "Pet Friendly": 12.0
+  }
+}
