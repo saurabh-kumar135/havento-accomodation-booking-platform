@@ -6,7 +6,7 @@ from services.agentService import process_chat
 from middleware.auth import get_current_user_optional
 
 async def post_chat(req: AgentChatRequest, user: Optional[User] = Depends(get_current_user_optional)):
-    user_id = str(user.id) if user else req.sessionId or "anonymous_guest"
+    user_id = str(user.id) if user else (req.userId or req.sessionId or "anonymous_guest")
     history = req.chatHistory or req.history or []
     result = await process_chat(req.message, history, user_id=user_id)
     reply_text = result.get("response") or result.get("reply") or ""

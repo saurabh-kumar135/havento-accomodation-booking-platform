@@ -10,6 +10,7 @@ class AgentChatRequest(BaseModel):
     chatHistory: Optional[List[Dict[str, Any]]] = []
     history: Optional[List[Dict[str, Any]]] = []
     sessionId: Optional[str] = None
+    userId: Optional[str] = None
 
 class AgentAction(BaseModel):
     type: str  # "VIEW_HOME", "OPEN_BOOKING", "CANCEL_BOOKING", "SEARCH_HOMES"

@@ -1,15 +1,18 @@
+import logging
 from typing import Optional
 from fastapi import Request, HTTPException, status, Depends
 from beanie import PydanticObjectId
 from utils.security import decode_access_token
 from models.user import User
 
+logger = logging.getLogger(__name__)
+
 async def get_current_user_optional(request: Request) -> Optional[User]:
     """Extract and validate user from Authorization header or cookie (optional)."""
     token = None
     
     # 1. Check Authorization Header: Bearer <token>
-    auth_header = request.headers.get("Authorization")
+    auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
     if auth_header and auth_header.startswith("Bearer "):
         token = auth_header.split(" ")[1]
         
@@ -22,16 +25,19 @@ async def get_current_user_optional(request: Request) -> Optional[User]:
         
     payload = decode_access_token(token)
     if not payload:
+        logger.warning(f"Failed to decode token: {token[:15]}...")
         return None
         
     user_id = payload.get("sub") or payload.get("userId") or payload.get("id") or payload.get("_id")
     if not user_id:
+        logger.warning(f"No user_id found in token payload: {payload}")
         return None
 
     try:
         user = await User.get(PydanticObjectId(str(user_id)))
         return user
-    except Exception:
+    except Exception as err:
+        logger.warning(f"Could not fetch user {user_id} from DB: {err}")
         return None
 
 async def get_current_user(user: Optional[User] = Depends(get_current_user_optional)) -> User:
