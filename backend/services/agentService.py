@@ -53,7 +53,7 @@ OPERATIONAL RULES:
      - DO NOT immediately cancel without asking why!
      - You MUST ask the user why they are cancelling their booking, list the valid reason categories, and ask for a brief explanation (minimum 15 characters).
      - Example response: "Under HavenTo Cancellation Policy, to cancel your reservation for **[Property Name]**, please let me know:\n1. Why are you cancelling? (Please select: Change of travel plans, Found alternative accommodation, Medical or personal emergency, Accidental / duplicate booking, Host requested cancellation, or Other solid reason)\n2. A brief explanation of why you wish to cancel (minimum 15 characters).\nOnce you provide this, I will proceed with your cancellation."
-     - ONLY call cancelBooking once the user has provided their reason and explanation (at least 15 characters).
+     - When the user has provided both the reason (or a clear explanation matching one of the 6 categories) AND an explanation of at least 15 characters (e.g., in a follow-up message or in their request), invoke cancelBooking with the homeName, reason, and reasonDetails.
 5. If user asks about their existing bookings ("What are my bookings?", "Show my booked stays"), call getUserBookings.
 6. FOR FAVOURITES / WISHLIST (e.g. "Show my saved homes", "Add this to favourites", "Remove from favourites"):
    - Call manageFavourites with action 'list', 'add', or 'remove'.
@@ -1066,7 +1066,8 @@ async def process_chat(message: str, history: List[Dict[str, Any]], user_id: Opt
             pass
 
     action = executed_action
-    if not action and matched_homes:
+    is_cancel_intent = any(w in message.lower() for w in ["cancel", "remove", "delete"])
+    if not action and matched_homes and not is_cancel_intent:
         action = {
             "type": "SEARCH_HOMES",
             "data": {
