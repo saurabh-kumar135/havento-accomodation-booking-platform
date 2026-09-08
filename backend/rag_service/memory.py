@@ -8,6 +8,8 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 def cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
+    if not vec_a or not vec_b or len(vec_a) != len(vec_b):
+        return 0.0
     a = np.array(vec_a, dtype=np.float32)
     b = np.array(vec_b, dtype=np.float32)
     norm = np.linalg.norm(a) * np.linalg.norm(b)

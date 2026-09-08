@@ -2,6 +2,7 @@ import os
 import re
 import json
 import logging
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from beanie import PydanticObjectId
 from config import settings
@@ -720,9 +721,9 @@ async def process_chat(message: str, history: List[Dict[str, Any]], user_id: Opt
             async with httpx.AsyncClient(timeout=25.0) as client:
                 models_to_try = [
                     "qwen/qwen3.8-27b",
-                    "openai/gpt-oss-20b",
-                    "llama-3.3-70b-versatile",
-                    "groq/compound"
+                    "qwen/qwen3.6-27b",
+                    "openai/gpt-oss-120b",
+                    "openai/gpt-oss-20b"
                 ]
 
                 for model_name in models_to_try:
