@@ -191,14 +191,68 @@ async def post_cancel_booking(booking_id: str, payload: dict = Body(default={}),
         booking = None
         
     if not booking or (booking.userId != user.id and booking.user != user.id):
-        raise HTTPException(status_code=404, detail="Booking not found or unauthorized")
+        raise HTTPException(status_code=404, detail="Booking not found or you do not have permission to cancel it.")
         
     if booking.status == "cancelled":
-        raise HTTPException(status_code=400, detail="Booking already cancelled")
+        raise HTTPException(status_code=400, detail="This booking has already been cancelled.")
         
-    reason = payload.get("reason", "Change of travel plans")
-    reason_details = payload.get("reasonDetails", "Cancelled by guest")
+    valid_reasons = [
+        "Change of travel plans",
+        "Found alternative accommodation",
+        "Medical or personal emergency",
+        "Accidental / duplicate booking",
+        "Host requested cancellation",
+        "Other solid reason",
+    ]
+
+    reason = payload.get("reason")
+    reason_details = (payload.get("reasonDetails") or "").strip()
+
+    if not reason or reason not in valid_reasons:
+        raise HTTPException(
+            status_code=400,
+            detail="A valid reason category is required to cancel your reservation."
+        )
+
+    if not reason_details or len(reason_details) < 15:
+        raise HTTPException(
+            status_code=400,
+            detail="Please provide a solid reason and detailed explanation (minimum 15 characters). Otherwise, booking cannot be cancelled."
+        )
+
     now = datetime.now(timezone.utc)
+    CANCELLATION_WINDOW_HOURS = 24
+
+    if booking.checkIn:
+        try:
+            ci_dt = booking.checkIn if isinstance(booking.checkIn, datetime) else datetime.fromisoformat(str(booking.checkIn).replace("Z", "+00:00"))
+            if ci_dt.tzinfo is None:
+                ci_dt = ci_dt.replace(tzinfo=timezone.utc)
+            cutoff = ci_dt - timedelta(hours=CANCELLATION_WINDOW_HOURS)
+            if now > cutoff:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cancellation deadline has passed. In accordance with HavenTo policy, reservations cannot be cancelled within 24 hours of the check-in date or once the stay has commenced."
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+    elif booking.createdAt:
+        try:
+            cr_dt = booking.createdAt if isinstance(booking.createdAt, datetime) else datetime.fromisoformat(str(booking.createdAt).replace("Z", "+00:00"))
+            if cr_dt.tzinfo is None:
+                cr_dt = cr_dt.replace(tzinfo=timezone.utc)
+            cutoff = cr_dt + timedelta(hours=CANCELLATION_WINDOW_HOURS)
+            if now > cutoff:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cancellation window closed. Bookings without explicit dates can only be cancelled within 24 hours of creation."
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass
 
     booking.status = "cancelled"
     booking.cancellationReason = reason
