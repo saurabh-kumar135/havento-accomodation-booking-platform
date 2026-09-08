@@ -14,6 +14,9 @@ class Booking(Document):
     totalPrice: Optional[float] = 0.0
     guests: int = 1
     status: str = "confirmed"  # "confirmed", "cancelled", "completed"
+    cancellationReason: Optional[str] = None
+    cancellationDetails: Optional[str] = None
+    cancelledAt: Optional[datetime] = None
     createdAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updatedAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

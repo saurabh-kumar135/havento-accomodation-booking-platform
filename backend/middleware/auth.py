@@ -21,12 +21,15 @@ async def get_current_user_optional(request: Request) -> Optional[User]:
         return None
         
     payload = decode_access_token(token)
-    if not payload or "sub" not in payload:
+    if not payload:
         return None
         
-    user_id = payload["sub"]
+    user_id = payload.get("sub") or payload.get("userId") or payload.get("id") or payload.get("_id")
+    if not user_id:
+        return None
+
     try:
-        user = await User.get(PydanticObjectId(user_id))
+        user = await User.get(PydanticObjectId(str(user_id)))
         return user
     except Exception:
         return None

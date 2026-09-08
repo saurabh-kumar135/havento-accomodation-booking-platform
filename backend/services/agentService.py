@@ -32,13 +32,18 @@ OPERATIONAL RULES:
      a) If you already know the home (or only 1 home exists in that location), call createBooking immediately with the homeId/homeName, checkIn, checkOut, and guests.
      b) If you don't know which home they want, use searchHomes first to find it, or present options and ask them which one they want to book.
      c) If dates are provided, pass them to createBooking. If dates are not provided, call createBooking with flexible/default dates so the reservation is confirmed.
-4. When showing homes, present them in a clean numbered list with:
+4. FOR CANCELLATION & REMOVING BOOKED HOMES (e.g. "Cancel my booking", "Remove the home which is booked", "Cancel reservation for Canada", "Delete my booking"):
+   - When user wants to cancel or remove a reservation, call cancelBooking immediately.
+   - If user asks about their current bookings ("What are my bookings?", "Show my booked stays"), call getUserBookings.
+5. FOR FAVOURITES / WISHLIST (e.g. "Show my saved homes", "Add this to favourites", "Remove from favourites"):
+   - Call manageFavourites with action 'list', 'add', or 'remove'.
+6. When showing homes, present them in a clean numbered list with:
    - Name
    - Location
    - Price (₹/night)
    - Rating
    - ID (so the user can easily say "Book #1" or "Tell me more")
-5. STRICT TRUTHFULNESS & ZERO HALLUCINATION: You must ONLY mention and describe homes that exist in HavenTo database. If a stay exists in a location (such as "Saurabh's home" in Taharpur), describe it accurately. NEVER invent fake hotels.
+7. STRICT TRUTHFULNESS & ZERO HALLUCINATION: You must ONLY mention and describe homes that exist in HavenTo database. If a stay exists in a location (such as "Saurabh's home" in Taharpur), describe it accurately. NEVER invent fake hotels.
 """
 
 # Tool schemas for Groq LLM
@@ -121,6 +126,57 @@ TOOLS = [
                     },
                 },
                 "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancelBooking",
+            "description": "Cancel or remove an existing booked home or reservation. Use this whenever the user wants to cancel, remove, or delete a booking.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "bookingId": {
+                        "type": "string",
+                        "description": "The MongoDB ObjectId of the booking to cancel (if known)",
+                    },
+                    "homeName": {
+                        "type": "string",
+                        "description": "The name of the booked home to cancel (if bookingId is not known)",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Reason for cancellation (e.g. Change of plans, Found alternative, Emergency)",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manageFavourites",
+            "description": "Manage user's saved/favourite homes on HavenTo. Can list saved homes, add a home to favourites, or remove a home from favourites.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "add", "remove"],
+                        "description": "Action: 'list' to view favourites, 'add' to save, 'remove' to remove from saved",
+                    },
+                    "homeId": {
+                        "type": "string",
+                        "description": "The MongoDB ObjectId of the home (for add or remove)",
+                    },
+                    "homeName": {
+                        "type": "string",
+                        "description": "The name of the home (if homeId is not known)",
+                    },
+                },
+                "required": ["action"],
             },
         },
     },
@@ -231,21 +287,46 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], user_id: Optional[s
             }
 
         elif tool_name == "getUserBookings":
-            if not user_id:
-                return {"error": "User must be logged in to view bookings."}
-            bookings = await Booking.find({"user": PydanticObjectId(user_id)}).sort("-createdAt").to_list()
+            if not user_id or user_id == "anonymous_guest" or not PydanticObjectId.is_valid(user_id):
+                return {
+                    "error": "User must be logged in to view bookings.",
+                    "requiresLogin": True
+                }
+            user_obj_id = PydanticObjectId(user_id)
+            bookings = await Booking.find({
+                "$or": [
+                    {"userId": user_obj_id},
+                    {"user": user_obj_id}
+                ]
+            }).sort("-createdAt").limit(10).to_list()
+
+            if not bookings:
+                return {"count": 0, "bookings": [], "message": "You don't have any bookings yet."}
+
+            home_ids = [b.homeId or b.home for b in bookings if (b.homeId or b.home)]
+            homes = await Home.find({"_id": {"$in": home_ids}}).to_list() if home_ids else []
+            homes_dict = {h.id: h for h in homes}
+
+            booking_list = []
+            for b in bookings:
+                h = homes_dict.get(b.homeId or b.home)
+                h_name = h.houseName.strip() if h else "Property details unavailable"
+                h_loc = h.location.strip() if h else ""
+                h_price = f"₹{h.price:,.0f}/night" if h else ""
+                booking_list.append({
+                    "bookingId": str(b.id),
+                    "status": b.status,
+                    "homeName": h_name,
+                    "location": h_loc,
+                    "pricePerNight": h_price,
+                    "totalPrice": f"₹{b.totalPrice:,.0f}" if b.totalPrice else "",
+                    "dates": f"{b.checkIn} to {b.checkOut}" if (b.checkIn and b.checkOut) else "Flexible dates",
+                    "guests": b.guests
+                })
+
             return {
-                "bookingsCount": len(bookings),
-                "bookings": [
-                    {
-                        "id": str(b.id),
-                        "status": b.status,
-                        "checkIn": b.checkIn.isoformat() if b.checkIn else None,
-                        "checkOut": b.checkOut.isoformat() if b.checkOut else None,
-                        "totalPrice": b.totalPrice,
-                    }
-                    for b in bookings
-                ],
+                "count": len(booking_list),
+                "bookings": booking_list
             }
 
         elif tool_name == "createBooking":
@@ -302,8 +383,6 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], user_id: Optional[s
 
             if check_in_raw and check_out_raw:
                 try:
-                    from datetime import date
-                    # Handle ISO string (e.g. 2025-10-15)
                     ci = datetime.fromisoformat(str(check_in_raw).replace("Z", "+00:00"))
                     co = datetime.fromisoformat(str(check_out_raw).replace("Z", "+00:00"))
                     diff_days = max(1, (co.date() - ci.date()).days)
@@ -344,6 +423,199 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], user_id: Optional[s
                 "status": "confirmed",
                 "message": f"Booking successfully confirmed for {target_home.houseName.strip()} in {target_home.location.strip()}!"
             }
+
+        elif tool_name == "cancelBooking":
+            if not user_id or user_id == "anonymous_guest" or not PydanticObjectId.is_valid(user_id):
+                return {
+                    "error": "You must be logged in to cancel or remove a booked home.",
+                    "requiresLogin": True
+                }
+
+            user_obj_id = PydanticObjectId(user_id)
+            booking_id = args.get("bookingId")
+            home_name = (args.get("homeName") or "").strip(" .,!?:;'\"")
+            reason = args.get("reason") or "Change of travel plans"
+            cancel_all = bool(args.get("cancelAll")) or "all" in home_name.lower()
+
+            # 1. Fetch user's confirmed bookings
+            confirmed_bookings = await Booking.find({
+                "$or": [
+                    {"userId": user_obj_id},
+                    {"user": user_obj_id}
+                ],
+                "status": "confirmed"
+            }).sort("-createdAt").to_list()
+
+            if not confirmed_bookings:
+                # Check if user had any bookings that were already cancelled
+                any_user_bookings = await Booking.find({
+                    "$or": [
+                        {"userId": user_obj_id},
+                        {"user": user_obj_id}
+                    ]
+                }).to_list()
+
+                if any_user_bookings and all(b.status == "cancelled" for b in any_user_bookings):
+                    return {
+                        "error": "All of your bookings have already been cancelled."
+                    }
+                return {
+                    "error": "You do not have any active confirmed bookings to cancel or remove."
+                }
+
+            # If user wants to cancel all booked homes
+            if cancel_all:
+                now = datetime.now(timezone.utc)
+                cancelled_names = []
+                for b in confirmed_bookings:
+                    b.status = "cancelled"
+                    b.cancellationReason = reason
+                    b.cancelledAt = now
+                    b.updatedAt = now
+                    await b.save()
+                    h = await Home.get(b.homeId or b.home) if (b.homeId or b.home) else None
+                    if h:
+                        cancelled_names.append(h.houseName.strip())
+
+                names_str = ", ".join(cancelled_names) if cancelled_names else f"{len(confirmed_bookings)} properties"
+                return {
+                    "success": True,
+                    "cancelledCount": len(confirmed_bookings),
+                    "status": "cancelled",
+                    "message": f"Successfully cancelled and removed {len(confirmed_bookings)} booked home(s) ({names_str}). The reserved dates have been released."
+                }
+
+            # 2. Try to match by bookingId
+            target_booking = None
+            if booking_id and PydanticObjectId.is_valid(booking_id):
+                for b in confirmed_bookings:
+                    if str(b.id) == booking_id:
+                        target_booking = b
+                        break
+
+            # 3. Try to match by homeName or location
+            generic_words = {"home", "booked home", "the home", "it", "this", "my booking", "stay", "booked", "unknown"}
+            if not target_booking and home_name and home_name.lower() not in generic_words:
+                matched_homes = await Home.find({
+                    "$or": [
+                        {"houseName": {"$regex": home_name, "$options": "i"}},
+                        {"location": {"$regex": home_name, "$options": "i"}}
+                    ]
+                }).to_list()
+                matched_home_ids = [h.id for h in matched_homes]
+                if matched_home_ids:
+                    for b in confirmed_bookings:
+                        if (b.homeId in matched_home_ids) or (b.home in matched_home_ids):
+                            target_booking = b
+                            break
+
+            # 4. If only 1 confirmed booking exists, select it automatically
+            if not target_booking:
+                if len(confirmed_bookings) == 1:
+                    target_booking = confirmed_bookings[0]
+                else:
+                    home_ids = [b.homeId or b.home for b in confirmed_bookings if (b.homeId or b.home)]
+                    homes = await Home.find({"_id": {"$in": home_ids}}).to_list() if home_ids else []
+                    homes_dict = {h.id: h for h in homes}
+                    options = []
+                    for i, b in enumerate(confirmed_bookings):
+                        h = homes_dict.get(b.homeId or b.home)
+                        options.append({
+                            "number": i + 1,
+                            "bookingId": str(b.id),
+                            "homeName": h.houseName.strip() if h else "Unknown property",
+                            "dates": f"{b.checkIn} to {b.checkOut}" if (b.checkIn and b.checkOut) else "Flexible dates"
+                        })
+                    return {
+                        "status": "multiple_bookings",
+                        "message": f"You have {len(confirmed_bookings)} active confirmed bookings. Which one would you like me to remove or cancel?",
+                        "options": options
+                    }
+
+            # 5. Perform cancellation
+            now = datetime.now(timezone.utc)
+            target_booking.status = "cancelled"
+            target_booking.cancellationReason = reason
+            target_booking.cancelledAt = now
+            target_booking.updatedAt = now
+            await target_booking.save()
+
+            target_home = await Home.get(target_booking.homeId or target_booking.home) if (target_booking.homeId or target_booking.home) else None
+            h_name = target_home.houseName.strip() if target_home else "the property"
+
+            return {
+                "success": True,
+                "bookingId": str(target_booking.id),
+                "homeName": h_name,
+                "status": "cancelled",
+                "message": f"Your booking for {h_name} has been cancelled and removed successfully. The reserved dates have been released."
+            }
+
+
+        elif tool_name == "manageFavourites":
+            if not user_id or user_id == "anonymous_guest" or not PydanticObjectId.is_valid(user_id):
+                return {
+                    "error": "User must be logged in to manage favourites.",
+                    "requiresLogin": True
+                }
+
+            user = await User.get(PydanticObjectId(user_id))
+            if not user:
+                return {"error": "User not found."}
+
+            action = args.get("action", "list")
+            user_favs = getattr(user, "favourites", []) or []
+
+            if action == "list":
+                if not user_favs:
+                    return {"count": 0, "favourites": [], "message": "You have no saved favourites yet."}
+                fav_homes = await Home.find({"_id": {"$in": user_favs}}).to_list()
+                return {
+                    "count": len(fav_homes),
+                    "favourites": [
+                        {
+                            "id": str(h.id),
+                            "name": h.houseName.strip(),
+                            "location": h.location.strip(),
+                            "price": f"₹{h.price:,.0f}/night",
+                            "rating": h.rating
+                        }
+                        for h in fav_homes
+                    ]
+                }
+
+            # Find target home for add or remove
+            home_id_arg = args.get("homeId")
+            home_name_arg = (args.get("homeName") or "").strip(" .,!?:;'\"")
+            target_home = None
+            if home_id_arg and PydanticObjectId.is_valid(home_id_arg):
+                target_home = await Home.get(PydanticObjectId(home_id_arg))
+            if not target_home and home_name_arg:
+                target_home = await Home.find_one({"houseName": {"$regex": home_name_arg, "$options": "i"}})
+
+            if not target_home:
+                return {"error": "Could not find the property to update favourites."}
+
+            if action == "add":
+                if target_home.id not in user_favs:
+                    user_favs.append(target_home.id)
+                    user.favourites = user_favs
+                    await user.save()
+                return {
+                    "success": True,
+                    "message": f"Added {target_home.houseName.strip()} to your favourites!"
+                }
+
+            elif action == "remove":
+                user_favs = [fid for fid in user_favs if fid != target_home.id]
+                user.favourites = user_favs
+                await user.save()
+                return {
+                    "success": True,
+                    "message": f"Removed {target_home.houseName.strip()} from your favourites."
+                }
+
+            return {"error": f"Unknown favourites action: {action}"}
 
         elif tool_name == "predictDynamicPricing":
             from services.pricingService import predict_optimal_price
@@ -435,6 +707,7 @@ async def process_chat(message: str, history: List[Dict[str, Any]], user_id: Opt
     ]
 
     response_text = ""
+    executed_action = None
     suggested_queries = [
         "Show stays in Taharpur",
         "Best villas in Mumbai",
@@ -497,6 +770,14 @@ async def process_chat(message: str, history: List[Dict[str, Any]], user_id: Opt
                                 logger.info(f"🔧 Tool invoked: {fn_name}({fn_args})")
                                 tool_result = await execute_tool(fn_name, fn_args, user_id)
 
+                                if tool_result.get("success"):
+                                    if fn_name == "createBooking":
+                                        executed_action = {"type": "OPEN_BOOKING", "data": tool_result}
+                                    elif fn_name == "cancelBooking":
+                                        executed_action = {"type": "CANCEL_BOOKING", "data": tool_result}
+                                    elif fn_name == "manageFavourites":
+                                        executed_action = {"type": "FAVOURITES_UPDATED", "data": tool_result}
+
                                 messages.append({
                                     "role": "tool",
                                     "tool_call_id": tc["id"],
@@ -513,6 +794,8 @@ async def process_chat(message: str, history: List[Dict[str, Any]], user_id: Opt
                                 json={
                                     "model": model_name,
                                     "messages": messages,
+                                    "tools": TOOLS,
+                                    "tool_choice": "auto",
                                     "temperature": 0.5,
                                     "max_tokens": 800
                                 }
@@ -531,6 +814,7 @@ async def process_chat(message: str, history: List[Dict[str, Any]], user_id: Opt
 
                     except Exception as err:
                         logger.warning(f"Error trying model {model_name}: {err}")
+
 
         except Exception as e:
             logger.error(f"Groq API connection failed: {e}")
@@ -553,8 +837,8 @@ async def process_chat(message: str, history: List[Dict[str, Any]], user_id: Opt
         except Exception:
             pass
 
-    action = None
-    if matched_homes:
+    action = executed_action
+    if not action and matched_homes:
         action = {
             "type": "SEARCH_HOMES",
             "data": {

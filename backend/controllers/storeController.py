@@ -31,16 +31,21 @@ def serialize_home(home: Home) -> dict:
     }
 
 def serialize_booking(booking: Booking, home: Optional[Home] = None) -> dict:
+    h_id = booking.homeId or booking.home
+    u_id = booking.userId or booking.user
     res = {
         "_id": str(booking.id),
         "id": str(booking.id),
-        "homeId": str(booking.homeId),
-        "userId": str(booking.userId),
+        "homeId": str(h_id) if h_id else None,
+        "userId": str(u_id) if u_id else None,
         "checkIn": booking.checkIn,
         "checkOut": booking.checkOut,
         "totalPrice": booking.totalPrice,
         "guests": booking.guests,
         "status": booking.status,
+        "cancellationReason": getattr(booking, "cancellationReason", None),
+        "cancellationDetails": getattr(booking, "cancellationDetails", None),
+        "cancelledAt": booking.cancelledAt.isoformat() if getattr(booking, "cancelledAt", None) else None,
         "createdAt": booking.createdAt.isoformat() if booking.createdAt else None
     }
     if home:
@@ -135,13 +140,18 @@ async def post_remove_favourite(home_id: str, user: User = Depends(get_current_u
     }
 
 async def get_bookings(user: User = Depends(get_current_user)):
-    bookings = await Booking.find(Booking.userId == user.id).sort("-createdAt").to_list()
+    bookings = await Booking.find({
+        "$or": [
+            {"userId": user.id},
+            {"user": user.id}
+        ]
+    }).sort("-createdAt").to_list()
     
-    home_ids = [b.homeId for b in bookings]
-    homes = await Home.find({"_id": {"$in": home_ids}}).to_list()
+    home_ids = [b.homeId or b.home for b in bookings if (b.homeId or b.home)]
+    homes = await Home.find({"_id": {"$in": home_ids}}).to_list() if home_ids else []
     homes_dict = {h.id: h for h in homes}
     
-    serialized_bookings = [serialize_booking(b, homes_dict.get(b.homeId)) for b in bookings]
+    serialized_bookings = [serialize_booking(b, homes_dict.get(b.homeId or b.home)) for b in bookings]
     
     return {
         "success": True,
@@ -159,7 +169,9 @@ async def post_create_booking(req: BookingCreate, user: User = Depends(get_curre
         
     new_booking = Booking(
         homeId=home.id,
+        home=home.id,
         userId=user.id,
+        user=user.id,
         checkIn=req.checkIn,
         checkOut=req.checkOut,
         totalPrice=req.totalPrice or home.price,
@@ -180,17 +192,24 @@ async def post_cancel_booking(booking_id: str, payload: dict = Body(...), user: 
     except Exception:
         booking = None
         
-    if not booking or booking.userId != user.id:
+    if not booking or (booking.userId != user.id and booking.user != user.id):
         raise HTTPException(status_code=404, detail="Booking not found or unauthorized")
         
     if booking.status == "cancelled":
         raise HTTPException(status_code=400, detail="Booking already cancelled")
         
+    reason = payload.get("reason", "Change of travel plans")
+    reason_details = payload.get("reasonDetails", "Cancelled by guest")
+    now = datetime.now(timezone.utc)
+
     booking.status = "cancelled"
-    booking.updatedAt = datetime.now(timezone.utc)
+    booking.cancellationReason = reason
+    booking.cancellationDetails = reason_details
+    booking.cancelledAt = now
+    booking.updatedAt = now
     await booking.save()
     
-    home = await Home.get(booking.homeId)
+    home = await Home.get(booking.homeId or booking.home) if (booking.homeId or booking.home) else None
     
     return {
         "success": True,
@@ -204,7 +223,7 @@ async def delete_booking(booking_id: str, user: User = Depends(get_current_user)
     except Exception:
         booking = None
         
-    if not booking or booking.userId != user.id:
+    if not booking or (booking.userId != user.id and booking.user != user.id):
         raise HTTPException(status_code=404, detail="Booking not found or unauthorized")
         
     await booking.delete()
@@ -212,3 +231,4 @@ async def delete_booking(booking_id: str, user: User = Depends(get_current_user)
         "success": True,
         "message": "Booking removed completely from your list."
     }
+
