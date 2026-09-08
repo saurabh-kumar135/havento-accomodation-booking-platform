@@ -34,9 +34,10 @@ OPERATIONAL RULES:
      a) If you already know the home (or only 1 home exists in that location), call createBooking immediately with the homeId/homeName, checkIn, checkOut, and guests.
      b) If you don't know which home they want, use searchHomes first to find it, or present options and ask them which one they want to book.
      c) If dates are provided, pass them to createBooking. If dates are not provided, call createBooking with flexible/default dates so the reservation is confirmed.
-4. FOR CANCELLATION & REMOVING BOOKED HOMES (e.g. "Cancel my booking", "Remove the home which is booked", "Cancel reservation for Canada", "Delete my booking"):
-   - When user wants to cancel or remove a reservation, call cancelBooking immediately.
-   - If user asks about their current bookings ("What are my bookings?", "Show my booked stays"), call getUserBookings.
+4. FOR CANCELLATION & REMOVING BOOKED HOMES (e.g. "Cancel my booking", "Remove the home which are booked", "remove from booked home", "Cancel reservation for Canada", "Delete my booking"):
+   - When user asks to cancel, remove, or delete a booking or booked home, ALWAYS call cancelBooking immediately!
+   - Do NOT ask questions or call getUserBookings first when the user asks to cancel or remove. cancelBooking will automatically identify and cancel their booking.
+   - If user asks about their bookings ("What are my bookings?", "Show my booked stays"), call getUserBookings.
 5. FOR FAVOURITES / WISHLIST (e.g. "Show my saved homes", "Add this to favourites", "Remove from favourites"):
    - Call manageFavourites with action 'list', 'add', or 'remove'.
 6. When showing homes, present them in a clean numbered list with:
@@ -135,7 +136,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "cancelBooking",
-            "description": "Cancel or remove an existing booked home or reservation. Use this whenever the user wants to cancel, remove, or delete a booking.",
+            "description": "Cancel or remove an existing booked home or reservation. ALWAYS invoke this tool immediately whenever the user wants to cancel, remove, or delete a booking or stay (e.g. 'remove from booked home', 'cancel my booking', 'remove the home which are booked'). If the user does not specify which home, invoke with empty arguments to auto-cancel their active booking or retrieve options.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -145,11 +146,11 @@ TOOLS = [
                     },
                     "homeName": {
                         "type": "string",
-                        "description": "The name of the booked home to cancel (if bookingId is not known)",
+                        "description": "The name or location of the booked home to cancel (e.g. 'My home in Canada', '#1')",
                     },
                     "reason": {
                         "type": "string",
-                        "description": "Reason for cancellation (e.g. Change of plans, Found alternative, Emergency)",
+                        "description": "Reason for cancellation",
                     },
                 },
                 "required": [],
@@ -724,7 +725,43 @@ async def process_chat(message: str, history: List[Dict[str, Any]], user_id: Opt
     if user_id:
         memory_ctx = await rag_memory_service.get_context(user_id, message)
 
-    # 2. Smart pre-search directly in MongoDB to guarantee matching locations are found
+    # 2. Fetch User's current bookings context directly from MongoDB
+    user_bookings_ctx = ""
+    if user_id and PydanticObjectId.is_valid(user_id):
+        try:
+            uid = PydanticObjectId(user_id)
+            user_bookings = await Booking.find(
+                Or(Booking.userId == uid, Booking.user == uid)
+            ).sort("-createdAt").limit(10).to_list()
+            
+            if user_bookings:
+                now = datetime.now(timezone.utc)
+                home_ids = [b.homeId or b.home for b in user_bookings if (b.homeId or b.home)]
+                homes = await Home.find(In(Home.id, home_ids)).to_list() if home_ids else []
+                homes_map = {h.id: h for h in homes}
+                
+                b_lines = []
+                for b in user_bookings:
+                    status = b.status
+                    if status == "confirmed" and b.checkOut:
+                        try:
+                            co_dt = b.checkOut if isinstance(b.checkOut, datetime) else datetime.fromisoformat(str(b.checkOut).replace("Z", "+00:00"))
+                            if co_dt.tzinfo is None:
+                                co_dt = co_dt.replace(tzinfo=timezone.utc)
+                            if co_dt < now:
+                                status = "completed"
+                        except Exception:
+                            pass
+                    
+                    h = homes_map.get(b.homeId or b.home)
+                    h_info = f"{h.houseName.strip()} in {h.location.strip()}" if h else "Unknown property"
+                    b_lines.append(f"- Booking ID: {b.id}, Home: '{h_info}', Status: {status}, Dates: {b.checkIn} to {b.checkOut}")
+                
+                user_bookings_ctx = "\nCURRENT USER'S BOOKINGS (FROM DATABASE):\n" + "\n".join(b_lines) + "\n"
+        except Exception as e:
+            logger.warning(f"Could not load user bookings context: {e}")
+
+    # 3. Smart pre-search directly in MongoDB to guarantee matching locations are found
     matched_homes = await extract_and_presearch_homes(message)
     db_context = ""
     if matched_homes:
@@ -733,7 +770,7 @@ async def process_chat(message: str, history: List[Dict[str, Any]], user_id: Opt
             for h in matched_homes
         ])
 
-    effective_system_prompt = f"{SYSTEM_PROMPT}\n{memory_ctx}\n{db_context}"
+    effective_system_prompt = f"{SYSTEM_PROMPT}\n{memory_ctx}\n{user_bookings_ctx}\n{db_context}"
 
     messages = [
         {"role": "system", "content": effective_system_prompt},
@@ -749,19 +786,22 @@ async def process_chat(message: str, history: List[Dict[str, Any]], user_id: Opt
         "Check my active bookings"
     ]
 
-    # 3. Call Groq API with Tool Calling Support
+    # 4. Call Groq API with Tool Calling Support
     if settings.GROQ_API_KEY:
         try:
             async with httpx.AsyncClient(timeout=25.0) as client:
                 models_to_try = [
-                    "qwen/qwen3.8-27b",
-                    "qwen/qwen3.6-27b",
                     "openai/gpt-oss-120b",
-                    "openai/gpt-oss-20b"
+                    "openai/gpt-oss-20b",
+                    "qwen/qwen3.8-27b",
+                    "qwen/qwen3.6-27b"
                 ]
 
                 for model_name in models_to_try:
                     try:
+                        last_tool_name = None
+                        last_tool_result = None
+
                         # Initial request with tools
                         payload = {
                             "model": model_name,
@@ -804,6 +844,8 @@ async def process_chat(message: str, history: List[Dict[str, Any]], user_id: Opt
 
                                 logger.info(f"🔧 Tool invoked: {fn_name}({fn_args})")
                                 tool_result = await execute_tool(fn_name, fn_args, user_id)
+                                last_tool_name = fn_name
+                                last_tool_result = tool_result
 
                                 if tool_result.get("success"):
                                     if fn_name == "createBooking":
@@ -840,10 +882,51 @@ async def process_chat(message: str, history: List[Dict[str, Any]], user_id: Opt
                                 followup_data = followup_res.json()
                                 assistant_msg = followup_data["choices"][0]["message"]
                                 tool_calls = assistant_msg.get("tool_calls")
+                                if not tool_calls and assistant_msg.get("content"):
+                                    response_text = assistant_msg.get("content", "").strip()
                             else:
+                                logger.warning(f"Followup call failed HTTP {followup_res.status_code}: {followup_res.text[:120]}")
                                 break
 
-                        response_text = assistant_msg.get("content", "").strip()
+                        # If model finished without error, use its content
+                        if not response_text and not tool_calls:
+                            response_text = assistant_msg.get("content", "").strip()
+
+                        # If tool was executed but follow-up didn't provide text, synthesize response directly
+                        if not response_text and last_tool_result:
+                            if last_tool_name == "cancelBooking":
+                                if last_tool_result.get("success"):
+                                    response_text = last_tool_result.get("message", "Your booking has been cancelled and removed successfully.")
+                                elif last_tool_result.get("options"):
+                                    opts = last_tool_result["options"]
+                                    opts_str = "\n".join([f"{o['number']}. **{o['homeName']}** ({o['dates']})" for o in opts])
+                                    response_text = f"{last_tool_result.get('message', 'Which booking would you like to cancel?')}\n\n{opts_str}"
+                                elif last_tool_result.get("error"):
+                                    response_text = last_tool_result["error"]
+                            elif last_tool_name == "createBooking":
+                                if last_tool_result.get("success"):
+                                    response_text = last_tool_result.get("message", "Your reservation is confirmed!")
+                                elif last_tool_result.get("error"):
+                                    response_text = last_tool_result["error"]
+                            elif last_tool_name == "manageFavourites":
+                                response_text = last_tool_result.get("message", "Your favourites have been updated.")
+                            elif last_tool_name == "getUserBookings":
+                                b_list = last_tool_result.get("bookings", [])
+                                if not b_list:
+                                    response_text = "You do not have any bookings yet."
+                                else:
+                                    active = [b for b in b_list if b.get("status") == "confirmed"]
+                                    completed = [b for b in b_list if b.get("status") == "completed"]
+                                    cancelled = [b for b in b_list if b.get("status") == "cancelled"]
+                                    sections = []
+                                    if active:
+                                        sections.append("**Active Bookings:**\n" + "\n".join([f"- **{b['homeName']}** in {b['location']} ({b['dates']}) — {b['pricePerNight']}" for b in active]))
+                                    if completed:
+                                        sections.append("**Completed Stays:**\n" + "\n".join([f"- **{b['homeName']}** in {b['location']} ({b['dates']})" for b in completed]))
+                                    if cancelled:
+                                        sections.append("**Cancelled:**\n" + "\n".join([f"- **{b['homeName']}** in {b['location']}" for b in cancelled]))
+                                    response_text = "Here are your bookings:\n\n" + "\n\n".join(sections)
+
                         if response_text:
                             break
 
