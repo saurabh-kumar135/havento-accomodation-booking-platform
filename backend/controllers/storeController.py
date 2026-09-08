@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional, List
 from fastapi import HTTPException, status, Depends, Query, Body
 from beanie import PydanticObjectId
+from beanie.operators import Or, In
 from models.home import Home
 from models.user import User
 from models.booking import Booking
@@ -101,7 +102,7 @@ async def get_home_details(home_id: str, user: Optional[User] = Depends(get_curr
 async def get_favourites(user: User = Depends(get_current_user)):
     favourite_homes = []
     if user.favourites:
-        homes = await Home.find({"_id": {"$in": user.favourites}}).to_list()
+        homes = await Home.find(In(Home.id, user.favourites)).to_list()
         favourite_homes = [serialize_home(h) for h in homes]
         
     return {
@@ -140,15 +141,27 @@ async def post_remove_favourite(home_id: str, user: User = Depends(get_current_u
     }
 
 async def get_bookings(user: User = Depends(get_current_user)):
-    bookings = await Booking.find({
-        "$or": [
-            {"userId": user.id},
-            {"user": user.id}
-        ]
-    }).sort("-createdAt").to_list()
+    now = datetime.now(timezone.utc)
+    bookings = await Booking.find(
+        Or(Booking.userId == user.id, Booking.user == user.id)
+    ).sort("-createdAt").to_list()
     
+    # Automatically complete past bookings whose checkout date has passed
+    for b in bookings:
+        if b.status == "confirmed" and b.checkOut:
+            try:
+                co_dt = b.checkOut if isinstance(b.checkOut, datetime) else datetime.fromisoformat(str(b.checkOut).replace("Z", "+00:00"))
+                if co_dt.tzinfo is None:
+                    co_dt = co_dt.replace(tzinfo=timezone.utc)
+                if co_dt < now:
+                    b.status = "completed"
+                    b.updatedAt = now
+                    await b.save()
+            except Exception:
+                pass
+
     home_ids = [b.homeId or b.home for b in bookings if (b.homeId or b.home)]
-    homes = await Home.find({"_id": {"$in": home_ids}}).to_list() if home_ids else []
+    homes = await Home.find(In(Home.id, home_ids)).to_list() if home_ids else []
     homes_dict = {h.id: h for h in homes}
     
     serialized_bookings = [serialize_booking(b, homes_dict.get(b.homeId or b.home)) for b in bookings]
@@ -186,7 +199,7 @@ async def post_create_booking(req: BookingCreate, user: User = Depends(get_curre
         "booking": serialize_booking(new_booking, home)
     }
 
-async def post_cancel_booking(booking_id: str, payload: dict = Body(...), user: User = Depends(get_current_user)):
+async def post_cancel_booking(booking_id: str, payload: dict = Body(default={}), user: User = Depends(get_current_user)):
     try:
         booking = await Booking.get(PydanticObjectId(booking_id))
     except Exception:

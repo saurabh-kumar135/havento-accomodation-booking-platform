@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from beanie import PydanticObjectId
+from beanie.operators import Or, In
 from config import settings
 from models.home import Home
 from models.booking import Booking
@@ -294,18 +295,30 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], user_id: Optional[s
                     "requiresLogin": True
                 }
             user_obj_id = PydanticObjectId(user_id)
-            bookings = await Booking.find({
-                "$or": [
-                    {"userId": user_obj_id},
-                    {"user": user_obj_id}
-                ]
-            }).sort("-createdAt").limit(10).to_list()
+            now = datetime.now(timezone.utc)
+            bookings = await Booking.find(
+                Or(Booking.userId == user_obj_id, Booking.user == user_obj_id)
+            ).sort("-createdAt").limit(10).to_list()
 
             if not bookings:
                 return {"count": 0, "bookings": [], "message": "You don't have any bookings yet."}
 
+            # Auto-complete past stays
+            for b in bookings:
+                if b.status == "confirmed" and b.checkOut:
+                    try:
+                        co_dt = b.checkOut if isinstance(b.checkOut, datetime) else datetime.fromisoformat(str(b.checkOut).replace("Z", "+00:00"))
+                        if co_dt.tzinfo is None:
+                            co_dt = co_dt.replace(tzinfo=timezone.utc)
+                        if co_dt < now:
+                            b.status = "completed"
+                            b.updatedAt = now
+                            await b.save()
+                    except Exception:
+                        pass
+
             home_ids = [b.homeId or b.home for b in bookings if (b.homeId or b.home)]
-            homes = await Home.find({"_id": {"$in": home_ids}}).to_list() if home_ids else []
+            homes = await Home.find(In(Home.id, home_ids)).to_list() if home_ids else []
             homes_dict = {h.id: h for h in homes}
 
             booking_list = []
@@ -438,27 +451,33 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], user_id: Optional[s
             reason = args.get("reason") or "Change of travel plans"
             cancel_all = bool(args.get("cancelAll")) or "all" in home_name.lower()
 
-            # 1. Fetch user's confirmed bookings
-            confirmed_bookings = await Booking.find({
-                "$or": [
-                    {"userId": user_obj_id},
-                    {"user": user_obj_id}
-                ],
-                "status": "confirmed"
-            }).sort("-createdAt").to_list()
+            now = datetime.now(timezone.utc)
+            all_user_bookings = await Booking.find(
+                Or(Booking.userId == user_obj_id, Booking.user == user_obj_id)
+            ).sort("-createdAt").to_list()
+
+            # 1. Automatically complete past bookings and isolate active confirmed bookings
+            confirmed_bookings = []
+            for b in all_user_bookings:
+                if b.status == "confirmed":
+                    if b.checkOut:
+                        try:
+                            co_dt = b.checkOut if isinstance(b.checkOut, datetime) else datetime.fromisoformat(str(b.checkOut).replace("Z", "+00:00"))
+                            if co_dt.tzinfo is None:
+                                co_dt = co_dt.replace(tzinfo=timezone.utc)
+                            if co_dt < now:
+                                b.status = "completed"
+                                b.updatedAt = now
+                                await b.save()
+                                continue
+                        except Exception:
+                            pass
+                    confirmed_bookings.append(b)
 
             if not confirmed_bookings:
-                # Check if user had any bookings that were already cancelled
-                any_user_bookings = await Booking.find({
-                    "$or": [
-                        {"userId": user_obj_id},
-                        {"user": user_obj_id}
-                    ]
-                }).to_list()
-
-                if any_user_bookings and all(b.status == "cancelled" for b in any_user_bookings):
+                if all_user_bookings and all(b.status in ["cancelled", "completed"] for b in all_user_bookings):
                     return {
-                        "error": "All of your bookings have already been cancelled."
+                        "error": "You don't have any active upcoming bookings to remove right now. Your past trips have already completed."
                     }
                 return {
                     "error": "You do not have any active confirmed bookings to cancel or remove."
@@ -466,7 +485,6 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], user_id: Optional[s
 
             # If user wants to cancel all booked homes
             if cancel_all:
-                now = datetime.now(timezone.utc)
                 cancelled_names = []
                 for b in confirmed_bookings:
                     b.status = "cancelled"
@@ -494,37 +512,52 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], user_id: Optional[s
                         target_booking = b
                         break
 
-            # 3. Try to match by homeName or location
-            generic_words = {"home", "booked home", "the home", "it", "this", "my booking", "stay", "booked", "unknown"}
+            # 3. Check number reference (e.g. "1", "#1", "Remove #1")
+            num_match = re.search(r"#?(\d+)", home_name)
+            if not target_booking and num_match:
+                idx = int(num_match.group(1)) - 1
+                if 0 <= idx < len(confirmed_bookings):
+                    target_booking = confirmed_bookings[idx]
+
+            # 4. Try to match by homeName or location flexibly
+            generic_words = {"home", "booked home", "the home", "it", "this", "my booking", "stay", "booked", "unknown", "the stay", "reservation"}
             if not target_booking and home_name and home_name.lower() not in generic_words:
-                matched_homes = await Home.find({
-                    "$or": [
-                        {"houseName": {"$regex": home_name, "$options": "i"}},
-                        {"location": {"$regex": home_name, "$options": "i"}}
-                    ]
-                }).to_list()
-                matched_home_ids = [h.id for h in matched_homes]
-                if matched_home_ids:
-                    for b in confirmed_bookings:
-                        if (b.homeId in matched_home_ids) or (b.home in matched_home_ids):
+                home_ids = [b.homeId or b.home for b in confirmed_bookings if (b.homeId or b.home)]
+                homes = await Home.find(In(Home.id, home_ids)).to_list() if home_ids else []
+                homes_dict = {h.id: h for h in homes}
+
+                lower_term = home_name.lower()
+                for b in confirmed_bookings:
+                    h = homes_dict.get(b.homeId or b.home)
+                    if h:
+                        h_name_lower = h.houseName.strip().lower()
+                        h_loc_lower = h.location.strip().lower()
+                        combined = f"{h_name_lower} in {h_loc_lower}"
+                        if (h_name_lower in lower_term or 
+                            h_loc_lower in lower_term or 
+                            lower_term in h_name_lower or 
+                            lower_term in h_loc_lower or 
+                            lower_term in combined or 
+                            combined in lower_term):
                             target_booking = b
                             break
 
-            # 4. If only 1 confirmed booking exists, select it automatically
+            # 5. If only 1 confirmed booking exists, select it automatically!
             if not target_booking:
                 if len(confirmed_bookings) == 1:
                     target_booking = confirmed_bookings[0]
                 else:
                     home_ids = [b.homeId or b.home for b in confirmed_bookings if (b.homeId or b.home)]
-                    homes = await Home.find({"_id": {"$in": home_ids}}).to_list() if home_ids else []
+                    homes = await Home.find(In(Home.id, home_ids)).to_list() if home_ids else []
                     homes_dict = {h.id: h for h in homes}
                     options = []
                     for i, b in enumerate(confirmed_bookings):
                         h = homes_dict.get(b.homeId or b.home)
+                        h_loc = f" in {h.location.strip()}" if h and h.location else ""
                         options.append({
                             "number": i + 1,
                             "bookingId": str(b.id),
-                            "homeName": h.houseName.strip() if h else "Unknown property",
+                            "homeName": f"{h.houseName.strip()}{h_loc}" if h else "Unknown property",
                             "dates": f"{b.checkIn} to {b.checkOut}" if (b.checkIn and b.checkOut) else "Flexible dates"
                         })
                     return {
@@ -533,8 +566,7 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], user_id: Optional[s
                         "options": options
                     }
 
-            # 5. Perform cancellation
-            now = datetime.now(timezone.utc)
+            # 6. Perform cancellation
             target_booking.status = "cancelled"
             target_booking.cancellationReason = reason
             target_booking.cancelledAt = now
@@ -543,14 +575,16 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], user_id: Optional[s
 
             target_home = await Home.get(target_booking.homeId or target_booking.home) if (target_booking.homeId or target_booking.home) else None
             h_name = target_home.houseName.strip() if target_home else "the property"
+            h_loc = f" in {target_home.location.strip()}" if target_home and target_home.location else ""
 
             return {
                 "success": True,
                 "bookingId": str(target_booking.id),
                 "homeName": h_name,
                 "status": "cancelled",
-                "message": f"Your booking for {h_name} has been cancelled and removed successfully. The reserved dates have been released."
+                "message": f"Your booking for {h_name}{h_loc} has been cancelled and removed successfully. The reserved dates have been released."
             }
+
 
 
         elif tool_name == "manageFavourites":

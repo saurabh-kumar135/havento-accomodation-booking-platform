@@ -16,10 +16,13 @@ router.add_api_route("/favourites", storeController.get_favourites, methods=["GE
 router.add_api_route("/favourites", storeController.post_add_favourite, methods=["POST"])
 router.add_api_route("/favourites/add", storeController.post_add_favourite, methods=["POST"])
 router.add_api_route("/favourites/{home_id}", storeController.post_remove_favourite, methods=["DELETE"])
-router.add_api_route("/favourites/remove/{home_id}", storeController.post_remove_favourite, methods=["POST"])
+router.add_api_route("/favourites/remove/{home_id}", storeController.post_remove_favourite, methods=["POST", "DELETE"])
+router.add_api_route("/favourites/delete/{home_id}", storeController.post_remove_favourite, methods=["POST", "DELETE"])
 
 # Bookings routes
 router.add_api_route("/bookings", storeController.get_bookings, methods=["GET"])
 router.add_api_route("/bookings", storeController.post_create_booking, methods=["POST"])
 router.add_api_route("/bookings/{booking_id}/cancel", storeController.post_cancel_booking, methods=["POST"])
+router.add_api_route("/bookings/cancel/{booking_id}", storeController.post_cancel_booking, methods=["POST"])
 router.add_api_route("/bookings/{booking_id}", storeController.delete_booking, methods=["DELETE"])
+router.add_api_route("/bookings/delete/{booking_id}", storeController.delete_booking, methods=["POST", "DELETE"])
