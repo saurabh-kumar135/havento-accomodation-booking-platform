@@ -27,9 +27,11 @@ STRICT DOMAIN GUARDRAIL & SCOPE RESTRICTION:
 OPERATIONAL RULES:
 1. Always use searchHomes when a user asks for stays, recommendations, places to stay, or mentions a location, budget, or rating. Never make up fake homes.
 2. For specific properties, use getHomeDetails to fetch comprehensive details.
-3. FOR BOOKING REQUESTS (e.g. "Book the home in Taharpur", "Book Saurabh's home"):
-   - Acknowledge that the user's explicit intent is to BOOK/RESERVE a home.
-   - If you found the home, guide them to book or confirm dates and guests.
+3. FOR BOOKING REQUESTS (e.g. "Book the home in Taharpur", "Book Saurabh's home", "Book #1"):
+   - When the user explicitly wants to book or reserve a stay:
+     a) If you already know the home (or only 1 home exists in that location), call createBooking immediately with the homeId/homeName, checkIn, checkOut, and guests.
+     b) If you don't know which home they want, use searchHomes first to find it, or present options and ask them which one they want to book.
+     c) If dates are provided, pass them to createBooking. If dates are not provided, call createBooking with flexible/default dates so the reservation is confirmed.
 4. When showing homes, present them in a clean numbered list with:
    - Name
    - Location
@@ -87,6 +89,39 @@ TOOLS = [
             "name": "getUserBookings",
             "description": "View all existing bookings for the current user.",
             "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "createBooking",
+            "description": "Book or reserve a home for the user on HavenTo. Use this whenever the user wants to book or reserve a property. Can accept homeId or homeName, checkIn, checkOut, and guests.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "homeId": {
+                        "type": "string",
+                        "description": "The MongoDB ObjectId of the home to book (preferred)",
+                    },
+                    "homeName": {
+                        "type": "string",
+                        "description": "The name of the home to book if homeId is not known",
+                    },
+                    "checkIn": {
+                        "type": "string",
+                        "description": "Check-in date (e.g. 'YYYY-MM-DD' or '2025-10-15')",
+                    },
+                    "checkOut": {
+                        "type": "string",
+                        "description": "Check-out date (e.g. 'YYYY-MM-DD' or '2025-10-20')",
+                    },
+                    "guests": {
+                        "type": "integer",
+                        "description": "Number of guests (default 1)",
+                    },
+                },
+                "required": [],
+            },
         },
     },
     {
@@ -211,6 +246,103 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], user_id: Optional[s
                     }
                     for b in bookings
                 ],
+            }
+
+        elif tool_name == "createBooking":
+            if not user_id or user_id == "anonymous_guest" or not PydanticObjectId.is_valid(user_id):
+                return {
+                    "error": "User must be logged in to create a booking.",
+                    "requiresLogin": True
+                }
+
+            target_home = None
+            home_id_arg = args.get("homeId")
+            if home_id_arg and PydanticObjectId.is_valid(home_id_arg):
+                try:
+                    target_home = await Home.get(PydanticObjectId(home_id_arg))
+                except Exception:
+                    target_home = None
+
+            query_term = (args.get("homeName") or args.get("location") or home_id_arg or "").strip(" .,!?:;'\"")
+            if not target_home and query_term:
+                # 1. Try matching houseName directly
+                target_home = await Home.find_one({"houseName": {"$regex": query_term, "$options": "i"}})
+                # 2. If not found, try matching by location
+                if not target_home:
+                    loc_homes = await Home.find({"location": {"$regex": query_term, "$options": "i"}}).sort("-rating").to_list()
+                    if len(loc_homes) == 1:
+                        target_home = loc_homes[0]
+                    elif len(loc_homes) > 1:
+                        return {
+                            "status": "multiple_options",
+                            "message": f"I found {len(loc_homes)} stays in {query_term}. Which one would you like me to book?",
+                            "options": [
+                                {
+                                    "id": str(h.id),
+                                    "name": h.houseName.strip(),
+                                    "price": f"₹{h.price:,.0f}/night",
+                                    "rating": h.rating
+                                }
+                                for h in loc_homes
+                            ]
+                        }
+
+            if not target_home:
+                return {
+                    "error": "Could not find the property to book. Please specify the home name or ID."
+                }
+
+            # Parse dates and calculate total price
+            check_in_raw = args.get("checkIn")
+            check_out_raw = args.get("checkOut")
+            check_in_dt = None
+            check_out_dt = None
+            calculated_total = float(target_home.price)
+            guests_count = int(args.get("guests", 1) or 1)
+
+            if check_in_raw and check_out_raw:
+                try:
+                    from datetime import date
+                    # Handle ISO string (e.g. 2025-10-15)
+                    ci = datetime.fromisoformat(str(check_in_raw).replace("Z", "+00:00"))
+                    co = datetime.fromisoformat(str(check_out_raw).replace("Z", "+00:00"))
+                    diff_days = max(1, (co.date() - ci.date()).days)
+                    calculated_total = float(diff_days * target_home.price)
+                    check_in_dt = ci
+                    check_out_dt = co
+                except Exception:
+                    check_in_dt = check_in_raw
+                    check_out_dt = check_out_raw
+
+            user_obj_id = PydanticObjectId(user_id)
+            home_obj_id = target_home.id
+
+            new_booking = Booking(
+                homeId=home_obj_id,
+                home=home_obj_id,
+                userId=user_obj_id,
+                user=user_obj_id,
+                checkIn=check_in_dt,
+                checkOut=check_out_dt,
+                totalPrice=calculated_total,
+                guests=guests_count,
+                status="confirmed"
+            )
+            await new_booking.insert()
+
+            date_str = f"{check_in_raw} to {check_out_raw}" if (check_in_raw and check_out_raw) else "Confirmed (flexible dates)"
+
+            return {
+                "success": True,
+                "bookingId": str(new_booking.id),
+                "homeName": target_home.houseName.strip(),
+                "location": target_home.location.strip(),
+                "pricePerNight": f"₹{target_home.price:,.0f}",
+                "totalPrice": f"₹{calculated_total:,.0f}",
+                "dates": date_str,
+                "guests": guests_count,
+                "status": "confirmed",
+                "message": f"Booking successfully confirmed for {target_home.houseName.strip()} in {target_home.location.strip()}!"
             }
 
         elif tool_name == "predictDynamicPricing":
