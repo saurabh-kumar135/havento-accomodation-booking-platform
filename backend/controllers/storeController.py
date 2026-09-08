@@ -141,25 +141,10 @@ async def post_remove_favourite(home_id: str, user: User = Depends(get_current_u
     }
 
 async def get_bookings(user: User = Depends(get_current_user)):
-    now = datetime.now(timezone.utc)
     bookings = await Booking.find(
         Or(Booking.userId == user.id, Booking.user == user.id)
     ).sort("-createdAt").to_list()
     
-    # Automatically complete past bookings whose checkout date has passed
-    for b in bookings:
-        if b.status == "confirmed" and b.checkOut:
-            try:
-                co_dt = b.checkOut if isinstance(b.checkOut, datetime) else datetime.fromisoformat(str(b.checkOut).replace("Z", "+00:00"))
-                if co_dt.tzinfo is None:
-                    co_dt = co_dt.replace(tzinfo=timezone.utc)
-                if co_dt < now:
-                    b.status = "completed"
-                    b.updatedAt = now
-                    await b.save()
-            except Exception:
-                pass
-
     home_ids = [b.homeId or b.home for b in bookings if (b.homeId or b.home)]
     homes = await Home.find(In(Home.id, home_ids)).to_list() if home_ids else []
     homes_dict = {h.id: h for h in homes}
