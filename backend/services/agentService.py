@@ -882,7 +882,14 @@ async def process_chat(message: str, history: List[Dict[str, Any]], user_id: Opt
 
     messages = [
         {"role": "system", "content": effective_system_prompt},
-        *[{"role": m.get("role", "user"), "content": m.get("content", "")} for m in history[-4:]],
+        *[
+            {
+                "role": "assistant" if (m.get("role") in ["assistant", "bot"] or m.get("sender") in ["assistant", "bot"]) else "user",
+                "content": m.get("content") or m.get("text") or ""
+            }
+            for m in history[-6:]
+            if (m.get("content") or m.get("text"))
+        ],
         {"role": "user", "content": message}
     ]
 
@@ -952,6 +959,7 @@ async def process_chat(message: str, history: List[Dict[str, Any]], user_id: Opt
 
                                 logger.info(f"🔧 Tool invoked: {fn_name}({fn_args})")
                                 tool_result = await execute_tool(fn_name, fn_args, user_id)
+                                logger.info(f"📋 Tool result for {fn_name}: {tool_result}")
                                 last_tool_name = fn_name
                                 last_tool_result = tool_result
 
