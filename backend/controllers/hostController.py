@@ -23,6 +23,30 @@ async def get_host_homes(user: User = Depends(get_current_user)):
         "homes": serialized
     }
 
+async def get_add_home(user: User = Depends(get_current_user)):
+    return {
+        "success": True,
+        "pageTitle": "Add Home to HavenTo",
+        "currentPage": "addHome",
+        "editing": False,
+        "isLoggedIn": True,
+        "user": user.email if user else None
+    }
+
+async def get_edit_home(home_id: str, user: User = Depends(get_current_user)):
+    try:
+        home = await Home.get(PydanticObjectId(home_id))
+    except Exception:
+        home = None
+    if not home:
+        raise HTTPException(status_code=404, detail="Home not found")
+    return {
+        "success": True,
+        "home": serialize_home(home),
+        "editing": True,
+        "isLoggedIn": True
+    }
+
 async def post_add_home(
     houseName: str = Form(...),
     price: float = Form(...),
