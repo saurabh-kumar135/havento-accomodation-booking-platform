@@ -35,3 +35,51 @@ async def test_auth_flow(client):
     session_data = session_res.json()
     assert session_data["isLoggedIn"] is True
     assert session_data["user"]["email"] == unique_email
+
+@pytest.mark.asyncio
+async def test_mobile_auth_flow(client):
+    unique_email = f"mobile_{uuid.uuid4().hex[:8]}@example.com"
+    
+    # 1. Mobile Signup
+    signup_payload = {
+        "firstName": "MobileUser",
+        "lastName": "Test",
+        "email": unique_email,
+        "password": "MobilePassword123!",
+        "userType": "guest"
+    }
+    signup_res = await client.post("/api/auth/mobile/signup", json=signup_payload)
+    assert signup_res.status_code == 200 or signup_res.status_code == 201
+    signup_data = signup_res.json()
+    assert signup_data["success"] is True
+    assert "token" in signup_data
+    assert signup_data["user"]["email"] == unique_email
+    assert signup_data["user"]["role"] == "guest"
+
+    # 2. Mobile Login
+    login_payload = {
+        "email": unique_email,
+        "password": "MobilePassword123!"
+    }
+    login_res = await client.post("/api/auth/mobile/login", json=login_payload)
+    assert login_res.status_code == 200
+    login_data = login_res.json()
+    assert login_data["success"] is True
+    assert "token" in login_data
+    token = login_data["token"]
+    assert login_data["user"]["role"] == "guest"
+    assert login_data["user"]["onboarded"] is True
+
+    # 3. Mobile Me with Bearer token
+    me_res = await client.get("/api/auth/mobile/me", headers={"Authorization": f"Bearer {token}"})
+    assert me_res.status_code == 200
+    me_data = me_res.json()
+    assert me_data["success"] is True
+    assert me_data["user"]["email"] == unique_email
+    assert me_data["user"]["_id"] == login_data["user"]["_id"]
+
+    # 4. Mobile Logout
+    logout_res = await client.post("/api/auth/mobile/logout")
+    assert logout_res.status_code == 200
+    assert logout_res.json()["success"] is True
+

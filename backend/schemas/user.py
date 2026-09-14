@@ -8,6 +8,13 @@ class RegisterRequest(BaseModel):
     password: str
     userType: str = "guest"
 
+class MobileRegisterRequest(BaseModel):
+    firstName: str
+    lastName: Optional[str] = ""
+    email: EmailStr
+    password: str
+    userType: Optional[str] = "guest"
+
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str

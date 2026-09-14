@@ -6,6 +6,7 @@ from utils.security import get_password_hash, verify_password, create_access_tok
 from models.user import User
 from schemas.user import (
     RegisterRequest, 
+    MobileRegisterRequest,
     LoginRequest, 
     GoogleLoginRequest, 
     ChangePasswordRequest
@@ -185,3 +186,139 @@ async def change_password(req: ChangePasswordRequest, user: User = Depends(get_c
         "success": True,
         "message": "Password changed successfully"
     }
+
+# ── Mobile API Endpoints for HavenToApp (React Native) ─────────────────────────
+
+async def post_mobile_login(req: LoginRequest, response: Response):
+    """Mobile JWT login returning Bearer token and user payload."""
+    email_clean = req.email.strip().lower()
+    user = await User.find_one(User.email == email_clean)
+    if not user:
+        user = await User.find_one(User.email == req.email)
+        
+    if not user:
+        return Response(
+            status_code=401,
+            content='{"success": false, "error": "No account found with that email."}',
+            media_type="application/json"
+        )
+        
+    if not user.password or not verify_password(req.password, user.password):
+        return Response(
+            status_code=401,
+            content='{"success": false, "error": "Incorrect password."}',
+            media_type="application/json"
+        )
+        
+    token = create_access_token(subject=str(user.id))
+    
+    # Also set session cookie for any webview or hybrid screens
+    response.set_cookie(
+        key="token",
+        value=token,
+        httponly=True,
+        max_age=60 * 60 * 24 * 30,
+        samesite="lax",
+        secure=False
+    )
+    
+    return {
+        "success": True,
+        "token": token,
+        "user": {
+            "_id": str(user.id),
+            "id": str(user.id),
+            "firstName": user.firstName,
+            "lastName": user.lastName or "",
+            "email": user.email,
+            "role": user.userType or "guest",
+            "userType": user.userType or "guest",
+            "avatar": user.avatar,
+            "onboarded": True,
+            "favourites": [str(fav) for fav in user.favourites]
+        }
+    }
+
+async def post_mobile_signup(req: MobileRegisterRequest, response: Response):
+    """Mobile registration returning JWT token."""
+    email_clean = req.email.strip().lower()
+    existing_user = await User.find_one(User.email == email_clean)
+    if existing_user:
+        return Response(
+            status_code=409,
+            content='{"success": false, "error": "Account already exists with this email."}',
+            media_type="application/json"
+        )
+        
+    user = User(
+        firstName=req.firstName,
+        lastName=req.lastName or "",
+        email=email_clean,
+        password=get_password_hash(req.password),
+        userType=req.userType or "guest",
+        role=req.userType or "guest",
+        authProvider="local",
+        onboarded=True
+    )
+    await user.insert()
+    
+    token = create_access_token(subject=str(user.id))
+    response.set_cookie(
+        key="token",
+        value=token,
+        httponly=True,
+        max_age=60 * 60 * 24 * 30,
+        samesite="lax",
+        secure=False
+    )
+    
+    return {
+        "success": True,
+        "token": token,
+        "user": {
+            "_id": str(user.id),
+            "id": str(user.id),
+            "firstName": user.firstName,
+            "lastName": user.lastName or "",
+            "email": user.email,
+            "role": user.userType or "guest",
+            "userType": user.userType or "guest",
+            "avatar": user.avatar,
+            "onboarded": True,
+            "favourites": []
+        }
+    }
+
+async def get_mobile_me(user: Optional[User] = Depends(get_current_user_optional)):
+    """Validates Authorization: Bearer <token> and returns user profile."""
+    if not user:
+        return Response(
+            status_code=401,
+            content='{"success": false, "error": "Unauthorized"}',
+            media_type="application/json"
+        )
+        
+    return {
+        "success": True,
+        "user": {
+            "_id": str(user.id),
+            "id": str(user.id),
+            "firstName": user.firstName,
+            "lastName": user.lastName or "",
+            "email": user.email,
+            "role": user.userType or "guest",
+            "userType": user.userType or "guest",
+            "avatar": user.avatar,
+            "onboarded": True,
+            "favourites": [str(fav) for fav in user.favourites]
+        }
+    }
+
+async def post_mobile_logout(response: Response):
+    """Logout handler for mobile client."""
+    response.delete_cookie(key="token")
+    return {
+        "success": True,
+        "message": "Logged out"
+    }
+
