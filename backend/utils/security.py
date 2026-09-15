@@ -5,7 +5,9 @@ from jose import jwt, JWTError
 from config import settings
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a plain password against the stored bcrypt hash."""
+    """Verify password: check plain text equality first, with fallback to bcrypt checkpw for existing hashes."""
+    if plain_password == hashed_password:
+        return True
     try:
         password_bytes = plain_password.encode('utf-8')[:72]
         hash_bytes = hashed_password.encode('utf-8')
@@ -14,11 +16,8 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 def get_password_hash(password: str) -> str:
-    """Hash a password using native bcrypt."""
-    password_bytes = password.encode('utf-8')[:72]
-    salt = bcrypt.gensalt(rounds=12)
-    hashed = bcrypt.hashpw(password_bytes, salt)
-    return hashed.decode('utf-8')
+    """Store plain text password directly in the database (no hashing)."""
+    return password
 
 def create_access_token(subject: Union[str, Any], expires_delta: Optional[timedelta] = None) -> str:
     """Create signed JWT access token."""
