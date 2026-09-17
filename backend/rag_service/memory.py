@@ -69,6 +69,8 @@ class RAGMemoryService:
     async def save_memory(self, user_id: str, user_msg: str, agent_res: str):
         if not user_id or not user_msg or not agent_res:
             return
+        if "virtual booking assistant" in agent_res:
+            return
             
         try:
             from utils.databaseUtil import db
