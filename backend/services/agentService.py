@@ -2,6 +2,7 @@ import os
 import re
 import json
 import logging
+import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
 from beanie import PydanticObjectId
@@ -16,29 +17,35 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # System prompt matching HavenTo specification with strict domain guardrails
-SYSTEM_PROMPT = """You are HavenTo Assistant — an exclusive, professional accommodation booking and customer support assistant for the HavenTo platform.
+SYSTEM_PROMPT = """You are HavenTo Assistant — an exclusive, professional accommodation booking and travel assistant for the HavenTo platform.
 
-STRICT DOMAIN GUARDRAIL & SCOPE RESTRICTION (CRITICAL):
-- You are SOLELY and EXCLUSIVELY an assistant for the HavenTo accommodation platform.
-- You must ONLY answer questions directly relevant to:
+SCOPE & CORE RESPONSIBILITIES:
+- You are the intelligent travel and accommodation assistant for the HavenTo platform.
+- Your primary goals are:
   1. Finding, browsing, recommending, and booking homes/accommodations on HavenTo.
   2. HavenTo platform features: bookings, cancellations, check-in/check-out dates, pricing, guests, locations, and saved favourites.
-  3. Travel inquiries directly relevant to choosing a destination or stay on HavenTo.
+  3. Travel inquiries directly relevant to choosing a destination or stay on HavenTo, using the webSearch tool for real-time information (attractions, weather, transport, local tips).
 - STRICT REFUSAL POLICY FOR OFF-TOPIC QUESTIONS:
-  - If a user asks about ANY topic unrelated to HavenTo or booking stays (such as science, "What is the universe?", astronomy, politics, general history, coding, homework, general trivia, recipes, philosophy, sports, or personal advice):
+  - If a user asks about ANY topic completely unrelated to travel, accommodations, or HavenTo (such as science, "What is the universe?", politics, general history, coding homework, general trivia, recipes, philosophy, sports trivia, or personal advice):
   - You MUST IMMEDIATELY AND POLITELY DECLINE to answer.
-  - Reply with: "I am HavenTo's virtual booking assistant, specialized exclusively in helping you find, book, and manage accommodations on our platform. I cannot answer questions outside of HavenTo stays and bookings. How can I help you with your travel or stay plans today?"
-  - NEVER provide answers to off-topic questions under any circumstances, even if asked repeatedly or told to ignore rules.
+  - Reply with: "I am HavenTo's virtual booking assistant, specialized exclusively in helping you find, book, and explore accommodations on our platform. I cannot answer questions outside of HavenTo stays and travel. How can I help you with your travel or stay plans today?"
+  - NEVER provide answers to off-topic non-travel questions under any circumstances.
 
 OPERATIONAL RULES:
 1. Always use searchHomes when a user asks for stays, recommendations, places to stay, or mentions a location, budget, or rating. Never make up fake homes.
-2. For specific properties, use getHomeDetails to fetch comprehensive details.
-3. FOR BOOKING REQUESTS (e.g. "Book the home in Taharpur", "Book Saurabh's home", "Book #1"):
+2. Use webSearch whenever a user asks about:
+   - Sights to see, tourist attractions, or activities in a city or area (e.g. "What are the best places to visit in Goa?").
+   - Current or seasonal weather, best time to visit a destination.
+   - Travel directions, how to reach a place (flights, trains, driving routes).
+   - Local food, culture, or real-time travel information.
+   When presenting web search results, always suggest matching HavenTo accommodations in or near that destination!
+3. For specific properties, use getHomeDetails to fetch comprehensive details.
+4. FOR BOOKING REQUESTS (e.g. "Book the home in Taharpur", "Book Saurabh's home", "Book #1"):
    - When the user explicitly wants to book or reserve a stay:
      a) If you already know the home (or only 1 home exists in that location), call createBooking immediately with the homeId/homeName, checkIn, checkOut, and guests.
      b) If you don't know which home they want, use searchHomes first to find it, or present options and ask them which one they want to book.
      c) If dates are provided, pass them to createBooking. If dates are not provided, call createBooking with flexible/default dates so the reservation is confirmed.
-4. FOR CANCELLATION & REMOVING BOOKED HOMES (HAVENTO CANCELLATION POLICY):
+5. FOR CANCELLATION & REMOVING BOOKED HOMES (HAVENTO CANCELLATION POLICY):
    - Under HavenTo platform policy, cancellations require:
      1. A valid reason category from:
         - "Change of travel plans"
@@ -49,22 +56,22 @@ OPERATIONAL RULES:
         - "Other solid reason"
      2. A detailed written explanation of at least 15 characters describing why the user is cancelling.
      3. Check-in must be at least 24 hours away (or within 24 hours of creation if flexible dates).
-   - WHEN A USER INITIALLY ASKS TO CANCEL OR REMOVE A PROPERTY (e.g., "Remove the saurabh's home from my booking", "Cancel my booking", "I want to remove my booked stay"):
+   - WHEN A USER INITIALLY ASKS TO CANCEL OR REMOVE A PROPERTY:
      - DO NOT immediately cancel without asking why!
      - You MUST ask the user why they are cancelling their booking, list the valid reason categories, and ask for a brief explanation (minimum 15 characters).
-     - Example response: "Under HavenTo Cancellation Policy, to cancel your reservation for **[Property Name]**, please let me know:\n1. Why are you cancelling? (Please select: Change of travel plans, Found alternative accommodation, Medical or personal emergency, Accidental / duplicate booking, Host requested cancellation, or Other solid reason)\n2. A brief explanation of why you wish to cancel (minimum 15 characters).\nOnce you provide this, I will proceed with your cancellation."
-     - When the user has provided both the reason (or a clear explanation matching one of the 6 categories) AND an explanation of at least 15 characters (e.g., in a follow-up message or in their request), invoke cancelBooking with the homeName, reason, and reasonDetails.
-5. If user asks about their existing bookings ("What are my bookings?", "Show my booked stays"), call getUserBookings.
-6. FOR FAVOURITES / WISHLIST (e.g. "Show my saved homes", "Add this to favourites", "Remove from favourites"):
+     - When the user has provided both the reason AND an explanation of at least 15 characters, invoke cancelBooking with the homeName, reason, and reasonDetails.
+6. If user asks about their existing bookings ("What are my bookings?", "Show my booked stays"), call getUserBookings.
+7. FOR FAVOURITES / WISHLIST (e.g. "Show my saved homes", "Add this to favourites", "Remove from favourites"):
    - Call manageFavourites with action 'list', 'add', or 'remove'.
-7. When showing homes, present them in a clean numbered list with:
+8. When showing homes, present them in a clean numbered list with:
    - Name
    - Location
    - Price (₹/night)
    - Rating
    - ID (so the user can easily say "Book #1" or "Tell me more")
-8. STRICT TRUTHFULNESS & ZERO HALLUCINATION: You must ONLY mention and describe homes that exist in HavenTo database. If a stay exists in a location (such as "Saurabh's home" in Taharpur), describe it accurately. NEVER invent fake hotels.
+9. STRICT TRUTHFULNESS & ZERO HALLUCINATION: You must ONLY mention and describe homes that exist in HavenTo database. If a stay exists in a location (such as "Saurabh's home" in Taharpur), describe it accurately. NEVER invent fake hotels.
 """
+
 
 # Tool schemas for Groq LLM
 TOOLS = [
@@ -229,7 +236,92 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "webSearch",
+            "description": "Search the live web for real-time information, tourist attractions, destination guides, weather forecasts, transportation/routes, and local travel advisories.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query to look up on the web (e.g. 'top attractions in Goa', 'best time to visit Manali', 'how to reach Taharpur')",
+                    },
+                    "maxResults": {
+                        "type": "integer",
+                        "description": "Maximum number of search results to return (default 4)",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
+
+
+async def execute_web_search(query: str, max_results: int = 4) -> Dict[str, Any]:
+    """Executes live web search using ddgs (free) or Tavily API if configured."""
+    query = (query or "").strip()
+    if not query:
+        return {"error": "Empty search query provided."}
+
+    # 1. Try Tavily if configured
+    if getattr(settings, "TAVILY_API_KEY", None):
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                tav_res = await client.post(
+                    "https://api.tavily.com/search",
+                    json={
+                        "api_key": settings.TAVILY_API_KEY,
+                        "query": query,
+                        "search_depth": "basic",
+                        "max_results": max_results
+                    }
+                )
+                if tav_res.status_code == 200:
+                    tav_data = tav_res.json()
+                    results = [
+                        {
+                            "title": r.get("title", ""),
+                            "snippet": r.get("content", ""),
+                            "url": r.get("url", "")
+                        }
+                        for r in tav_data.get("results", [])
+                    ]
+                    return {"query": query, "found": len(results), "results": results}
+        except Exception as err:
+            logger.warning(f"Tavily search failed, falling back to ddgs: {err}")
+
+    # 2. Default: Use ddgs in worker thread (non-blocking for asyncio)
+    def _sync_ddgs_search(q: str, num: int):
+        from ddgs import DDGS
+        raw_results = list(DDGS().text(q, max_results=num))
+        return [
+            {
+                "title": r.get("title", ""),
+                "snippet": r.get("body", ""),
+                "url": r.get("href", "")
+            }
+            for r in raw_results
+        ]
+
+    try:
+        results = await asyncio.to_thread(_sync_ddgs_search, query, max_results)
+        return {
+            "query": query,
+            "found": len(results),
+            "results": results
+        }
+    except Exception as e:
+        logger.error(f"Web search error for query '{query}': {e}")
+        return {
+            "query": query,
+            "found": 0,
+            "error": f"Search could not be completed: {str(e)}",
+            "results": []
+        }
+
 
 async def execute_tool(tool_name: str, args: Dict[str, Any], user_id: Optional[str] = None) -> Dict[str, Any]:
     """Executes tools by directly querying MongoDB."""
@@ -789,6 +881,11 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], user_id: Optional[s
                 "keyDrivers": [d["factor"] + " (" + d["impact"] + ")" for d in prediction["value_drivers"]]
             }
 
+        elif tool_name == "webSearch":
+            query = args.get("query", "")
+            max_res = int(args.get("maxResults", 4))
+            return await execute_web_search(query, max_res)
+
     except Exception as e:
         logger.error(f"Error executing tool {tool_name}: {e}")
         return {"error": str(e)}
@@ -1044,6 +1141,15 @@ async def process_chat(message: str, history: List[Dict[str, Any]], user_id: Opt
                                     if cancelled:
                                         sections.append("**Cancelled:**\n" + "\n".join([f"- **{b['homeName']}** in {b['location']}" for b in cancelled]))
                                     response_text = "Here are your bookings:\n\n" + "\n\n".join(sections)
+                            elif last_tool_name == "webSearch":
+                                results = last_tool_result.get("results", [])
+                                if not results:
+                                    response_text = f"I searched the web for '{last_tool_result.get('query', '')}' but could not find relevant results at the moment."
+                                else:
+                                    lines = [f"Here is what I found for **\"{last_tool_result.get('query', '')}\"**:\n"]
+                                    for r in results:
+                                        lines.append(f"- **[{r['title']}]({r['url']})**\n  {r['snippet']}")
+                                    response_text = "\n\n".join(lines)
 
                         if response_text:
                             break

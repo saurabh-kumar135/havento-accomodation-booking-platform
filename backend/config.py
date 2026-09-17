@@ -43,9 +43,11 @@ class Settings(BaseSettings):
     GMAIL_CLIENT_SECRET: Optional[str] = None
     GMAIL_REFRESH_TOKEN: Optional[str] = None
     
-    # AI Keys (Groq & Gemini)
+    # AI & Search Keys (Groq, Gemini, Tavily, Serper)
     GROQ_API_KEY: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
+    TAVILY_API_KEY: Optional[str] = None
+    SERPER_API_KEY: Optional[str] = None
     
     # Upload Directories
     UPLOAD_DIR: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "uploads")
