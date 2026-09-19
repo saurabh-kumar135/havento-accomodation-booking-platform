@@ -51,6 +51,8 @@ async def post_add_home(
     houseName: str = Form(...),
     price: float = Form(...),
     location: str = Form(...),
+    latitude: Optional[float] = Form(None),
+    longitude: Optional[float] = Form(None),
     description: Optional[str] = Form(None),
     category: Optional[str] = Form("Trending"),
     rating: Optional[float] = Form(4.8),
@@ -82,6 +84,8 @@ async def post_add_home(
         houseName=houseName,
         price=price,
         location=location,
+        latitude=latitude,
+        longitude=longitude,
         description=description,
         category=category or "Trending",
         rating=rating or 4.8,
@@ -108,6 +112,8 @@ async def post_edit_home(
     houseName: Optional[str] = Form(None),
     price: Optional[float] = Form(None),
     location: Optional[str] = Form(None),
+    latitude: Optional[float] = Form(None),
+    longitude: Optional[float] = Form(None),
     description: Optional[str] = Form(None),
     category: Optional[str] = Form(None),
     amenities: Optional[str] = Form(None),
@@ -129,6 +135,8 @@ async def post_edit_home(
     if houseName: home.houseName = houseName
     if price: home.price = price
     if location: home.location = location
+    if latitude is not None: home.latitude = latitude
+    if longitude is not None: home.longitude = longitude
     if description: home.description = description
     if category: home.category = category
     if amenities is not None:

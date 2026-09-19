@@ -7,6 +7,8 @@ class Home(Document):
     houseName: str
     price: float
     location: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     rating: float = 4.5
     photo: Optional[str] = None
     photos: List[str] = Field(default_factory=list)

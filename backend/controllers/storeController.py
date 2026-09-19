@@ -22,6 +22,8 @@ def serialize_home(home: Home) -> dict:
         "houseName": home.houseName,
         "price": home.price,
         "location": home.location,
+        "latitude": getattr(home, "latitude", None),
+        "longitude": getattr(home, "longitude", None),
         "rating": home.rating,
         "photo": primary_photo,
         "photos": photos,

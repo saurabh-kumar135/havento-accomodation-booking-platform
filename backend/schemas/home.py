@@ -5,6 +5,8 @@ class HomeCreate(BaseModel):
     houseName: str
     price: float
     location: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     rating: Optional[float] = 4.5
     photo: Optional[str] = None
     description: Optional[str] = None
@@ -15,6 +17,8 @@ class HomeUpdate(BaseModel):
     houseName: Optional[str] = None
     price: Optional[float] = None
     location: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     rating: Optional[float] = None
     photo: Optional[str] = None
     description: Optional[str] = None
@@ -27,6 +31,8 @@ class HomeResponse(BaseModel):
     houseName: str
     price: float
     location: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     rating: float
     photo: Optional[str] = None
     description: Optional[str] = None
