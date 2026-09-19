@@ -119,25 +119,35 @@ async def post_add_favourite(id: Optional[str] = Body(None, embed=True), homeId:
     if not target_id:
         raise HTTPException(status_code=400, detail="homeId or id is required")
         
-    obj_id = PydanticObjectId(target_id)
+    try:
+        obj_id = PydanticObjectId(target_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid home ID")
+
     if obj_id not in user.favourites:
         user.favourites.append(obj_id)
         await user.save()
         
     return {
         "success": True,
-        "message": "Added to favourites"
+        "message": "Added to favourites",
+        "favourites": [str(fav) for fav in user.favourites]
     }
 
 async def post_remove_favourite(home_id: str, user: User = Depends(get_current_user)):
-    obj_id = PydanticObjectId(home_id)
+    try:
+        obj_id = PydanticObjectId(home_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid home ID")
+
     if obj_id in user.favourites:
         user.favourites = [fav for fav in user.favourites if fav != obj_id]
         await user.save()
         
     return {
         "success": True,
-        "message": "Removed from favourites"
+        "message": "Removed from favourites",
+        "favourites": [str(fav) for fav in user.favourites]
     }
 
 async def get_bookings(user: User = Depends(get_current_user)):
@@ -164,7 +174,52 @@ async def post_create_booking(req: BookingCreate, user: User = Depends(get_curre
         
     if not home:
         raise HTTPException(status_code=404, detail="Property not found")
-        
+
+    calculated_total_price = req.totalPrice or float(home.price)
+
+    # Date validation and conflict checking
+    if req.checkIn and req.checkOut:
+        try:
+            ci_dt = datetime.fromisoformat(req.checkIn.replace("Z", "+00:00")) if "T" in req.checkIn else datetime.strptime(req.checkIn, "%Y-%m-%d")
+            co_dt = datetime.fromisoformat(req.checkOut.replace("Z", "+00:00")) if "T" in req.checkOut else datetime.strptime(req.checkOut, "%Y-%m-%d")
+
+            if co_dt <= ci_dt:
+                raise HTTPException(status_code=422, detail="Check-out date must be after check-in date")
+
+            diff_days = max(1, (co_dt - ci_dt).days)
+            if not req.totalPrice:
+                calculated_total_price = float(diff_days * home.price)
+
+            # Check for overlapping active confirmed bookings
+            conflicts = await Booking.find(
+                Or(Booking.homeId == home.id, Booking.home == home.id),
+                Booking.status == "confirmed"
+            ).to_list()
+
+            for b in conflicts:
+                if b.checkIn and b.checkOut:
+                    try:
+                        b_ci = b.checkIn if isinstance(b.checkIn, datetime) else (datetime.fromisoformat(str(b.checkIn).replace("Z", "+00:00")) if "T" in str(b.checkIn) else datetime.strptime(str(b.checkIn), "%Y-%m-%d"))
+                        b_co = b.checkOut if isinstance(b.checkOut, datetime) else (datetime.fromisoformat(str(b.checkOut).replace("Z", "+00:00")) if "T" in str(b.checkOut) else datetime.strptime(str(b.checkOut), "%Y-%m-%d"))
+                        if ci_dt.tzinfo: ci_dt = ci_dt.replace(tzinfo=None)
+                        if co_dt.tzinfo: co_dt = co_dt.replace(tzinfo=None)
+                        if b_ci.tzinfo: b_ci = b_ci.replace(tzinfo=None)
+                        if b_co.tzinfo: b_co = b_co.replace(tzinfo=None)
+
+                        if b_ci < co_dt and b_co > ci_dt:
+                            raise HTTPException(
+                                status_code=409,
+                                detail="This property is already booked for the selected dates. Please choose different dates."
+                            )
+                    except HTTPException:
+                        raise
+                    except Exception:
+                        pass
+        except HTTPException:
+            raise
+        except ValueError:
+            pass
+
     new_booking = Booking(
         homeId=home.id,
         home=home.id,
@@ -172,7 +227,7 @@ async def post_create_booking(req: BookingCreate, user: User = Depends(get_curre
         user=user.id,
         checkIn=req.checkIn,
         checkOut=req.checkOut,
-        totalPrice=req.totalPrice or home.price,
+        totalPrice=calculated_total_price,
         guests=req.guests or 1,
         status="confirmed"
     )
@@ -180,7 +235,7 @@ async def post_create_booking(req: BookingCreate, user: User = Depends(get_curre
     
     return {
         "success": True,
-        "message": "Booking confirmed",
+        "message": "Booking confirmed successfully",
         "booking": serialize_booking(new_booking, home)
     }
 

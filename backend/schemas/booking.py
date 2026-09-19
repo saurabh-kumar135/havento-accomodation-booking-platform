@@ -3,9 +3,9 @@ from pydantic import BaseModel
 
 class BookingCreate(BaseModel):
     homeId: str
-    checkIn: str
-    checkOut: str
-    totalPrice: float
+    checkIn: Optional[str] = None
+    checkOut: Optional[str] = None
+    totalPrice: Optional[float] = None
     guests: Optional[int] = 1
 
 class BookingResponse(BaseModel):
