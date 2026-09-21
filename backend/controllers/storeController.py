@@ -13,7 +13,7 @@ from middleware.auth import get_current_user, get_current_user_optional
 
 logger = logging.getLogger(__name__)
 
-def serialize_home(home: Home) -> dict:
+def serialize_home(home: Home, host_data: Optional[dict] = None) -> dict:
     photos = getattr(home, "photos", []) or []
     primary_photo = home.photo or (photos[0] if photos else None)
     return {
@@ -30,6 +30,7 @@ def serialize_home(home: Home) -> dict:
         "description": home.description,
         "category": home.category,
         "host": str(home.host) if home.host else None,
+        "hostId": host_data,
         "amenities": home.amenities or []
     }
 
@@ -65,7 +66,19 @@ async def get_homes(
         query["category"] = category
         
     homes = await Home.find(query).to_list()
-    serialized = [serialize_home(h) for h in homes]
+    host_ids = [h.host for h in homes if h.host]
+    host_map = {}
+    if host_ids:
+        host_users = await User.find(In(User.id, host_ids)).to_list()
+        for hu in host_users:
+            host_map[hu.id] = {
+                "_id": str(hu.id),
+                "firstName": hu.firstName,
+                "lastName": hu.lastName,
+                "hostKyc": hu.hostKyc.model_dump() if hu.hostKyc else {"isVerified": False, "status": "unverified"}
+            }
+
+    serialized = [serialize_home(h, host_data=host_map.get(h.host)) for h in homes]
     
     return {
         "success": True,
@@ -93,10 +106,21 @@ async def get_home_details(home_id: str, user: Optional[User] = Depends(get_curr
         
     if not home:
         raise HTTPException(status_code=404, detail="Home not found")
+
+    host_data = None
+    if home.host:
+        host_user = await User.get(home.host)
+        if host_user:
+            host_data = {
+                "_id": str(host_user.id),
+                "firstName": host_user.firstName,
+                "lastName": host_user.lastName,
+                "hostKyc": host_user.hostKyc.model_dump() if host_user.hostKyc else {"isVerified": False, "status": "unverified"}
+            }
         
     return {
         "success": True,
-        "home": serialize_home(home),
+        "home": serialize_home(home, host_data=host_data),
         "isLoggedIn": user is not None,
         "user": user
     }

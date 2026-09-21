@@ -2,15 +2,17 @@ import os
 import uuid
 import logging
 from typing import List, Optional
+from pydantic import BaseModel
 from fastapi import HTTPException, status, Depends, UploadFile, File, Form
 from beanie import PydanticObjectId
 import aiofiles
 from config import settings
 from models.home import Home
-from models.user import User
+from models.user import User, HostKyc
 from models.booking import Booking
 from middleware.auth import get_current_user
 from controllers.storeController import serialize_home, serialize_booking
+from services.kycService import verify_host_identity
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,16 @@ async def post_add_home(
     photos: Optional[List[UploadFile]] = File(None),
     user: User = Depends(get_current_user)
 ):
+    if not user.hostKyc or not user.hostKyc.isVerified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "success": False,
+                "requireKyc": True,
+                "message": "Host identity verification required. Please verify your Aadhaar or PAN card before listing a property."
+            }
+        )
+
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     saved_photos = []
     
@@ -189,4 +201,48 @@ async def get_host_bookings(user: User = Depends(get_current_user)):
     return {
         "success": True,
         "bookings": serialized
+    }
+
+class KycVerificationRequest(BaseModel):
+    documentType: str
+    documentNumber: str
+    fullName: str
+
+async def post_verify_kyc(req: KycVerificationRequest, user: User = Depends(get_current_user)):
+    verification = await verify_host_identity(
+        document_type=req.documentType,
+        document_number=req.documentNumber,
+        full_name=req.fullName
+    )
+    if not verification.get("success"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=verification.get("error", "Verification failed.")
+        )
+    
+    user.hostKyc = HostKyc(
+        isVerified=True,
+        documentType=verification["document_type"],
+        maskedNumber=verification["masked_number"],
+        documentHash=verification["document_hash"],
+        fullNameAsOnDoc=verification["full_name_as_on_doc"],
+        status="verified",
+        verificationRef=verification["verification_ref"],
+        verifiedAt=verification["verified_at"]
+    )
+    user.userType = "host"
+    await user.save()
+
+    return {
+        "success": True,
+        "message": f"{verification['document_type'].upper()} verified successfully! You are now a Verified Host on HavenTo.",
+        "hostKyc": user.hostKyc.model_dump(),
+        "userType": user.userType
+    }
+
+async def get_kyc_status(user: User = Depends(get_current_user)):
+    return {
+        "success": True,
+        "hostKyc": user.hostKyc.model_dump() if user.hostKyc else {"isVerified": False, "status": "unverified"},
+        "userType": user.userType
     }

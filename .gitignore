@@ -47,6 +47,5 @@ backend/static/uploads/*
 # IDEs
 .vscode/
 .idea/
-*.swp
-*.swo
-.DS_Store
+# Scratch & Tests
+temperature_diversity*

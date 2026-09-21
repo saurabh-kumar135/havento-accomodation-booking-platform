@@ -44,7 +44,8 @@ async def check_session(user: Optional[User] = Depends(get_current_user_optional
                 "email": user.email,
                 "userType": user.userType,
                 "avatar": user.avatar,
-                "favourites": [str(fav) for fav in user.favourites]
+                "favourites": [str(fav) for fav in user.favourites],
+                "hostKyc": user.hostKyc.model_dump() if user.hostKyc else {"isVerified": False, "status": "unverified"}
             }
         }
     return {
@@ -118,7 +119,8 @@ async def post_login(req: LoginRequest, response: Response):
             "email": user.email,
             "userType": user.userType,
             "avatar": user.avatar,
-            "favourites": [str(fav) for fav in user.favourites]
+            "favourites": [str(fav) for fav in user.favourites],
+            "hostKyc": user.hostKyc.model_dump() if user.hostKyc else {"isVerified": False, "status": "unverified"}
         }
     }
 
@@ -165,7 +167,8 @@ async def post_google_login(req: GoogleLoginRequest, response: Response):
             "email": user.email,
             "userType": user.userType,
             "avatar": user.avatar,
-            "favourites": [str(fav) for fav in user.favourites]
+            "favourites": [str(fav) for fav in user.favourites],
+            "hostKyc": user.hostKyc.model_dump() if user.hostKyc else {"isVerified": False, "status": "unverified"}
         }
     }
 

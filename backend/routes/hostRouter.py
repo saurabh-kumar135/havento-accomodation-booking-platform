@@ -18,3 +18,7 @@ router.add_api_route("/host-home-list", hostController.get_host_homes, methods=[
 router.add_api_route("/edit-home/{home_id}", hostController.get_edit_home, methods=["GET"])
 router.add_api_route("/edit-home", hostController.post_edit_home, methods=["POST"])
 router.add_api_route("/delete-home/{home_id}", hostController.delete_home, methods=["POST"])
+
+# KYC Identity Verification (Aadhaar & PAN)
+router.add_api_route("/verify-kyc", hostController.post_verify_kyc, methods=["POST"])
+router.add_api_route("/kyc-status", hostController.get_kyc_status, methods=["GET"])
