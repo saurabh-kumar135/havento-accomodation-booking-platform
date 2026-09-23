@@ -1,5 +1,5 @@
 import { createContext, useState, useEffect, useContext } from 'react';
-import { checkSession, login as loginApi, logout as logoutApi } from '../services/api';
+import { checkSession, login as loginApi, logout as logoutApi, googleLogin as googleLoginApi } from '../services/api';
 
 const AuthContext = createContext();
 
@@ -17,7 +17,11 @@ export const AuthProvider = ({ children }) => {
     try {
       const response = await checkSession();
       if (response.data.success && response.data.isLoggedIn) {
-        setUser(response.data.user);
+        const userData = response.data.user || {};
+        setUser({
+          ...userData,
+          favourites: (userData.favourites || []).map((f) => String(f?._id || f)),
+        });
         setIsLoggedIn(true);
       } else {
         setUser(null);
@@ -39,12 +43,20 @@ export const AuthProvider = ({ children }) => {
         if (response.data.token) {
           localStorage.setItem('havento_token', response.data.token);
         }
-        setUser(response.data.user);
+        const userData = response.data.user || {};
+        setUser({
+          ...userData,
+          favourites: (userData.favourites || []).map((f) => String(f?._id || f)),
+        });
         setIsLoggedIn(true);
         return { success: true };
       }
-      return { success: false, errors: response.data.errors };
+      return { 
+        success: false, 
+        errors: response.data.errors || ['Invalid credentials'] 
+      };
     } catch (error) {
+      console.error('Error logging in:', error);
       return { 
         success: false, 
         errors: error.response?.data?.errors || ['An error occurred during login'] 
@@ -67,11 +79,45 @@ export const AuthProvider = ({ children }) => {
   };
 
   const updateFavourites = (favourites) => {
-    setUser((prev) => (prev ? { ...prev, favourites } : prev));
+    setUser((prev) => {
+      if (!prev) return prev;
+      const favList = Array.isArray(favourites)
+        ? favourites.map((f) => String(f?._id || f))
+        : [];
+      return { ...prev, favourites: favList };
+    });
+  };
+
+  const googleLogin = async (googlePayload) => {
+    try {
+      const response = await googleLoginApi(googlePayload);
+      if (response.data.success) {
+        if (response.data.token) {
+          localStorage.setItem('havento_token', response.data.token);
+        }
+        const userData = response.data.user || {};
+        setUser({
+          ...userData,
+          favourites: (userData.favourites || []).map((f) => String(f?._id || f)),
+        });
+        setIsLoggedIn(true);
+        return { success: true };
+      }
+      return {
+        success: false,
+        errors: response.data.errors || [response.data.message || 'Google sign-in failed']
+      };
+    } catch (error) {
+      console.error('Error logging in with Google:', error);
+      return {
+        success: false,
+        errors: error.response?.data?.errors || [error.response?.data?.message || 'Error during Google sign-in']
+      };
+    }
   };
 
   return (
-    <AuthContext.Provider value={{ user, setUser, isLoggedIn, loading, login, logout, checkSessionStatus, updateFavourites }}>
+    <AuthContext.Provider value={{ user, setUser, isLoggedIn, loading, login, googleLogin, logout, checkSessionStatus, updateFavourites }}>
       {children}
     </AuthContext.Provider>
   );

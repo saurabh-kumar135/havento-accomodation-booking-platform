@@ -20,6 +20,7 @@ api.interceptors.request.use((config) => {
 
 export const checkSession = () => api.get('/api/auth/check-session');
 export const login = (email, password) => api.post('/api/auth/login', { email, password });
+export const googleLogin = (payload) => api.post('/api/auth/google-login', payload);
 export const signup = (userData) => api.post('/api/auth/signup', userData);
 export const logout = () => api.post('/api/auth/logout');
 
@@ -66,5 +67,9 @@ export const predictDynamicPrice = (data) => api.post('/api/analytics/pricing/pr
 export const getHomePricingAnalysis = (homeId) => api.get(`/api/analytics/pricing/home/${homeId}`);
 export const getHostRevenueMetrics = () => api.get('/api/analytics/host/metrics');
 export const getMarketOverview = () => api.get('/api/analytics/market/overview');
+
+// Host KYC Identity Verification (Aadhaar & PAN)
+export const verifyHostKyc = (data) => api.post('/api/host/verify-kyc', data);
+export const getHostKycStatus = () => api.get('/api/host/kyc-status');
 
 export default api;
