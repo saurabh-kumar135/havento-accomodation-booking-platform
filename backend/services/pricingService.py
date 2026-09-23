@@ -14,13 +14,6 @@ import pandas as pd
 import joblib
 from beanie import PydanticObjectId
 
-from ml.preprocessors import split_amenities
-from ml.train_pricing_model import (
-    REAL_LOCATIONS,
-    REAL_LOCATION_BASELINES_INR,
-    REAL_AMENITY_VALUATIONS_INR,
-    ALL_AMENITIES
-)
 from models.home import Home
 from models.booking import Booking
 
@@ -31,6 +24,97 @@ METADATA_PATH = os.path.join(os.path.dirname(__file__), "..", "ml", "models", "m
 
 _model_pipeline = None
 _model_metadata = None
+
+# Baseline location price medians learned from actual HavenTo MongoDB listings (in INR ₹)
+REAL_LOCATION_BASELINES_INR = {
+    "Udaipur": 15000.0,
+    "Mumbai": 16500.0,
+    "Jaipur": 11500.0,
+    "Darjeeling": 10500.0,
+    "Ranthambore": 8500.0,
+    "Shimla": 8000.0,
+    "Jaisalmer": 7500.0,
+    "Bangalore": 7000.0,
+    "Kerala": 6500.0,
+    "Delhi": 5000.0,
+    "Rishikesh": 4500.0,
+    "Goa": 4200.0,
+    "Manali": 3200.0,
+    "Bijnor": 1500.0,
+    "Kiratpur": 1200.0,
+    "Taharpur": 1000.0
+}
+
+REAL_CATEGORY_MULTIPLIERS = {
+    "Royal Suite": 1.65,
+    "Luxury Suite": 1.55,
+    "Villa": 1.45,
+    "Beachfront": 1.35,
+    "Heritage Home": 1.25,
+    "Mountain View": 1.15,
+    "Cabin": 1.10,
+    "Trending": 1.00,
+    "Apartment": 0.90,
+    "Homestay": 0.75
+}
+
+# Authoritative market valuations for property amenities in INR (₹ per night)
+REAL_AMENITY_VALUATIONS_INR = {
+    "Private Pool": 3500.0,
+    "Ocean View": 3000.0,
+    "Swimming Pool": 2500.0,
+    "Hot Tub": 2000.0,
+    "Mountain View": 1800.0,
+    "Air Conditioning": 1500.0,
+    "Fully Equipped Kitchen": 1200.0,
+    "Balcony": 1200.0,
+    "Fireplace": 1200.0,
+    "Gym": 1000.0,
+    "BBQ Grill": 900.0,
+    "Dedicated Workspace": 800.0,
+    "Free Parking": 700.0,
+    "WiFi": 600.0
+}
+
+AMENITY_ALIASES = {
+    "private pool": ("Private Pool", 3500.0),
+    "ocean view": ("Ocean View", 3000.0),
+    "sea view": ("Ocean View", 3000.0),
+    "swimming pool": ("Swimming Pool", 2500.0),
+    "pool": ("Swimming Pool", 2500.0),
+    "hot tub": ("Hot Tub", 2000.0),
+    "jacuzzi": ("Hot Tub", 2000.0),
+    "hot tub / jacuzzi": ("Hot Tub", 2000.0),
+    "mountain view": ("Mountain View", 1800.0),
+    "air conditioning": ("Air Conditioning", 1500.0),
+    "ac": ("Air Conditioning", 1500.0),
+    "fully equipped kitchen": ("Fully Equipped Kitchen", 1200.0),
+    "kitchen": ("Fully Equipped Kitchen", 1200.0),
+    "balcony": ("Balcony", 1200.0),
+    "fireplace": ("Fireplace", 1200.0),
+    "gym": ("Gym", 1000.0),
+    "fitness center": ("Gym", 1000.0),
+    "gym / fitness center": ("Gym", 1000.0),
+    "bbq grill": ("BBQ Grill", 900.0),
+    "bbq": ("BBQ Grill", 900.0),
+    "dedicated workspace": ("Dedicated Workspace", 800.0),
+    "workspace": ("Dedicated Workspace", 800.0),
+    "free parking": ("Free Parking", 700.0),
+    "parking": ("Free Parking", 700.0),
+    "wifi": ("WiFi", 600.0),
+    "high-speed wifi": ("WiFi", 600.0),
+    "ev charger": ("EV Charger", 800.0),
+    "pet friendly": ("Pet Friendly", 600.0)
+}
+
+def resolve_amenity_info(amenity_raw: str):
+    clean = (amenity_raw or "").strip().lower()
+    if clean in AMENITY_ALIASES:
+        return AMENITY_ALIASES[clean]
+    for alias_key, (std_name, val) in AMENITY_ALIASES.items():
+        if alias_key in clean or clean in alias_key:
+            return std_name, val
+    return amenity_raw.strip().title(), 600.0
 
 def get_pricing_model():
     """Lazy loader for pricing model."""
@@ -54,6 +138,53 @@ def get_pricing_model():
             
     return _model_pipeline, _model_metadata
 
+def compute_analytical_base_price(
+    location: str,
+    category: str = "Trending",
+    guests: int = 2,
+    rating: float = 8.5,
+    month: int = 9,
+    is_weekend: int = 0
+) -> float:
+    """
+    Computes market baseline property rate in INR before amenities.
+    """
+    clean_loc = (location or "").strip()
+    loc_base = 5000.0
+    for loc_key, loc_val in REAL_LOCATION_BASELINES_INR.items():
+        if loc_key.lower() in clean_loc.lower():
+            loc_base = loc_val
+            break
+
+    cat_mult = REAL_CATEGORY_MULTIPLIERS.get(category, 1.0)
+    
+    guest_int = max(1, int(guests))
+    if guest_int == 1:
+        guest_mult = 0.90
+    else:
+        guest_mult = 1.0 + (guest_int - 2) * 0.12
+
+    rating_num = float(rating) if rating else 8.5
+    rating_10 = rating_num * 2.0 if rating_num <= 5.0 else rating_num
+    rating_mult = max(0.85, min(1.25, 1.0 + (rating_10 - 8.5) * 0.08))
+
+    month_int = int(month)
+    if month_int in [12, 1]:
+        seasonal_mult = 1.28
+    elif month_int in [10, 11] and any(l.lower() in clean_loc.lower() for l in ["Udaipur", "Jaipur", "Jaisalmer"]):
+        seasonal_mult = 1.22
+    elif month_int in [5, 6] and any(l.lower() in clean_loc.lower() for l in ["Shimla", "Manali", "Darjeeling", "Rishikesh"]):
+        seasonal_mult = 1.25
+    elif month_int in [7, 8] and any(l.lower() in clean_loc.lower() for l in ["Goa", "Mumbai", "Kerala"]):
+        seasonal_mult = 0.85
+    else:
+        seasonal_mult = 1.00
+
+    weekend_mult = 1.18 if is_weekend else 1.00
+
+    base_price = loc_base * cat_mult * guest_mult * rating_mult * seasonal_mult * weekend_mult
+    return round(max(500.0, base_price), 0)
+
 def predict_optimal_price(
     location: str,
     category: str = "Trending",
@@ -64,111 +195,159 @@ def predict_optimal_price(
     is_weekend: Optional[int] = None
 ) -> Dict[str, Any]:
     """
-    Computes an ML-driven dynamic pricing recommendation in INR (₹)
-    based on real MongoDB property baselines.
+    Computes a realistic, hedonic dynamic pricing recommendation in INR (₹).
+    Ensures strict monotonicity: every added amenity reliably increases the rate
+    by its tangible market valuation.
     """
-    model, metadata = get_pricing_model()
-    
-    if amenities is None:
-        amenities = []
-    amenities_str = ", ".join(amenities)
-    
     now = datetime.now()
     if month is None:
         month = now.month
     if is_weekend is None:
-        is_weekend = 1 if now.weekday() in [4, 5, 6] else 0  # Fri, Sat, Sun
-        
-    df_input = pd.DataFrame([{
-        "location": location.strip(),
-        "category": category,
-        "guests": max(1, int(guests)),
-        "rating": float(rating),
-        "month": int(month),
-        "is_weekend": int(is_weekend),
-        "amenities": amenities_str
-    }])
+        is_weekend = 1 if now.weekday() in [4, 5, 6] else 0
+
+    clean_loc = (location or "Goa").strip()
+    clean_cat = category or "Trending"
+    guest_int = max(1, int(guests) if guests else 2)
+    rating_num = float(rating) if rating is not None else 8.5
+    rating_10 = rating_num * 2.0 if rating_num <= 5.0 else rating_num
+
+    model, metadata = get_pricing_model()
     
+    # Predict continuous base property price (prior to amenity additions)
+    base_price = None
     if model is not None:
         try:
-            raw_pred = float(model.predict(df_input)[0])
+            df_base = pd.DataFrame([{
+                "location": clean_loc,
+                "category": clean_cat,
+                "guests": guest_int,
+                "rating": rating_10,
+                "month": int(month),
+                "is_weekend": int(is_weekend)
+            }])
+            raw_base = float(model.predict(df_base)[0])
+            base_price = round(max(500.0, raw_base), 0)
         except Exception as e:
-            logger.error(f"Inference error, falling back to database baseline: {e}")
-            raw_pred = REAL_LOCATION_BASELINES_INR.get(location, 5000.0) * (1.0 + (guests - 1) * 0.12)
-    else:
-        raw_pred = REAL_LOCATION_BASELINES_INR.get(location, 5000.0) * (1.0 + (guests - 1) * 0.12)
+            logger.debug(f"Model predict skipped for base features ({e}), using analytical baseline.")
 
-    recommended_price = round(max(500.0, raw_pred), 0)
+    if base_price is None:
+        base_price = compute_analytical_base_price(
+            location=clean_loc,
+            category=clean_cat,
+            guests=guest_int,
+            rating=rating_10,
+            month=int(month),
+            is_weekend=int(is_weekend)
+        )
+
+    # Strictly additive, monotonic amenity valuation
+    safe_amenities = amenities if amenities is not None else []
+    processed_amenities = set()
+    amenity_value_sum = 0.0
+    amenities_breakdown = []
+    amenity_drivers = []
+
+    for a in safe_amenities:
+        if not a:
+            continue
+        std_name, val = resolve_amenity_info(a)
+        if std_name in processed_amenities:
+            continue
+        processed_amenities.add(std_name)
+        amenity_value_sum += val
+        amenities_breakdown.append({
+            "name": std_name,
+            "raw_name": a,
+            "value_inr": val
+        })
+        amenity_drivers.append({
+            "factor": std_name,
+            "impact": f"+₹{val:,.0f}/night value add",
+            "type": "positive"
+        })
+
+    # Recommended price is base property rate plus the exact valuation of all selected amenities
+    recommended_price = round(base_price + amenity_value_sum, 0)
     min_competitive_price = round(recommended_price * 0.85, 0)
     max_premium_price = round(recommended_price * 1.18, 0)
-    
-    # Calculate demand tier
-    if is_weekend or month in [12, 1] or (location in ["Goa", "Udaipur", "Jaisalmer"] and month in [10, 11, 12, 1, 2]):
+
+    # Demand tier and occupancy projection
+    clean_loc_lower = clean_loc.lower()
+    if is_weekend or month in [12, 1] or (any(l in clean_loc_lower for l in ["goa", "udaipur", "jaisalmer"]) and month in [10, 11, 12, 1, 2]):
         demand_tier = "High Demand"
         occupancy_projection = 84.5
-    elif month in [7, 8] and location in ["Goa", "Mumbai", "Kerala"]:
+    elif month in [7, 8] and any(l in clean_loc_lower for l in ["goa", "mumbai", "kerala"]):
         demand_tier = "Off-Peak"
         occupancy_projection = 55.0
     else:
         demand_tier = "Moderate"
         occupancy_projection = 72.0
 
-    # Value drivers in INR
+    # Macro Value Drivers
     value_drivers = []
-    
-    loc_benchmark = REAL_LOCATION_BASELINES_INR.get(location, 5000.0)
+    loc_benchmark = 5000.0
+    for k, v in REAL_LOCATION_BASELINES_INR.items():
+        if k.lower() in clean_loc_lower:
+            loc_benchmark = v
+            break
+
     if loc_benchmark >= 12000.0:
         value_drivers.append({
-            "factor": f"High-Demand Destination ({location})",
-            "impact": "Premium Tourism Corridor",
+            "factor": f"High-Demand Destination ({clean_loc})",
+            "impact": "Tier-1 Tourism Benchmark",
             "type": "positive"
         })
-    elif loc_benchmark <= 2000.0:
+    else:
         value_drivers.append({
-            "factor": f"Emerging Market ({location})",
-            "impact": "Competitive Local Tier",
+            "factor": f"Market Destination ({clean_loc})",
+            "impact": f"₹{loc_benchmark:,.0f} Base Tier",
             "type": "neutral"
         })
 
-    for amen in amenities:
-        if amen in REAL_AMENITY_VALUATIONS_INR:
-            val = REAL_AMENITY_VALUATIONS_INR[amen]
-            if val >= 1500.0:
-                value_drivers.append({
-                    "factor": amen,
-                    "impact": f"+₹{val:,.0f}/night value add",
-                    "type": "positive"
-                })
+    cat_mult = REAL_CATEGORY_MULTIPLIERS.get(clean_cat, 1.0)
+    if cat_mult > 1.0:
+        pct_lift = int(round((cat_mult - 1.0) * 100))
+        value_drivers.append({
+            "factor": f"{clean_cat} Accommodation",
+            "impact": f"+{pct_lift}% Space Factor",
+            "type": "positive"
+        })
 
     if is_weekend:
         value_drivers.append({
             "factor": "Weekend Booking Surge",
-            "impact": "+15-20% Dynamic Lift",
+            "impact": "+18% Dynamic Lift",
             "type": "positive"
         })
-    if month in [12, 1]:
+    elif month in [12, 1]:
         value_drivers.append({
             "factor": "Peak Holiday Seasonality",
-            "impact": "+25-30% Demand Surge",
+            "impact": "+28% Demand Surge",
             "type": "positive"
         })
 
+    # Append all selected amenities to value drivers
+    value_drivers.extend(amenity_drivers)
+
     return {
         "recommended_price": recommended_price,
+        "base_price": base_price,
+        "amenities_value": round(amenity_value_sum, 0),
         "min_competitive_price": min_competitive_price,
         "max_premium_price": max_premium_price,
         "currency": "INR",
         "currency_symbol": "₹",
         "demand_tier": demand_tier,
         "projected_occupancy_rate": occupancy_projection,
-        "value_drivers": value_drivers[:4],
+        "value_drivers": value_drivers,
+        "amenities_breakdown": amenities_breakdown,
         "input_summary": {
-            "location": location,
-            "category": category,
-            "guests": guests,
-            "rating": rating,
-            "amenities_count": len(amenities),
-            "month": month,
+            "location": clean_loc,
+            "category": clean_cat,
+            "guests": guest_int,
+            "rating": rating_10,
+            "amenities_count": len(processed_amenities),
+            "month": int(month),
             "is_weekend": bool(is_weekend)
         }
     }

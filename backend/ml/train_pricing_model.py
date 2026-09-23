@@ -103,10 +103,10 @@ async def fetch_real_db_homes():
         print(f"Notice: Could not connect to DB dynamically ({e}), using verified DB snapshot.")
         return []
 
-def build_training_dataset(real_homes, n_augmented: int = 8000) -> pd.DataFrame:
+def build_training_dataset(real_homes, n_augmented: int = 10000) -> pd.DataFrame:
     """
     Constructs a dataset anchored on real MongoDB property listings,
-    supplemented with realistic Indian seasonal variations, weekend surges, and guest scaling.
+    modeling base property rates across Indian travel corridors before amenity add-ons.
     """
     records = []
     
@@ -121,8 +121,7 @@ def build_training_dataset(real_homes, n_augmented: int = 8000) -> pd.DataFrame:
                 "rating": float(h.rating) if h.rating > 0 else 8.5,
                 "month": 10,
                 "is_weekend": 0,
-                "amenities": ", ".join(h.amenities) if h.amenities else "WiFi, Air Conditioning",
-                "price": float(h.price)
+                "base_price": float(h.price)
             })
 
     # 2. Augment around real database baselines
@@ -130,39 +129,29 @@ def build_training_dataset(real_homes, n_augmented: int = 8000) -> pd.DataFrame:
         location = np.random.choice(REAL_LOCATIONS)
         category = np.random.choice(REAL_CATEGORIES)
         guests = int(np.clip(np.random.poisson(3) + 1, 1, 14))
-        # 10-point rating scale matching HavenTo database (e.g. 7.5 to 9.9)
         rating = round(float(np.clip(np.random.normal(8.7, 0.6), 6.5, 9.9)), 1)
         month = int(np.random.randint(1, 13))
         is_weekend = int(np.random.choice([0, 1], p=[0.71, 0.29]))
         
-        num_amenities = np.random.randint(2, 6)
-        selected_amenities = list(np.random.choice(ALL_AMENITIES, size=num_amenities, replace=False))
-        amenities_str = ", ".join(selected_amenities)
-        
-        # Real pricing formula anchored to INR baselines
         base_inr = REAL_LOCATION_BASELINES_INR[location] * REAL_CATEGORY_MULTIPLIERS.get(category, 1.0)
-        guest_scale = 1.0 + (guests - 1) * 0.12
+        guest_scale = 1.0 + (guests - 2) * 0.12 if guests >= 2 else 0.90
         
-        # Real Indian seasonal patterns
-        # Peak tourist seasons: Dec-Jan (Goa, Rajasthan, Kerala), May-June (Shimla, Manali, Darjeeling)
         seasonal_mult = 1.0
         if month in [12, 1]:
-            seasonal_mult = 1.30  # Winter holiday peak across India
+            seasonal_mult = 1.28
         elif month in [10, 11] and location in ["Udaipur", "Jaipur", "Jaisalmer"]:
-            seasonal_mult = 1.25  # Diwali / Royal desert festival peak
+            seasonal_mult = 1.22
         elif month in [5, 6] and location in ["Shimla", "Manali", "Darjeeling", "Rishikesh"]:
-            seasonal_mult = 1.28  # Summer hill station escape
+            seasonal_mult = 1.25
         elif month in [7, 8] and location in ["Goa", "Mumbai", "Kerala"]:
-            seasonal_mult = 0.80  # Monsoon off-peak discounts
+            seasonal_mult = 0.85
             
         weekend_mult = 1.18 if is_weekend else 1.0
-        rating_mult = 1.0 + (rating - 8.5) * 0.10
+        rating_mult = 1.0 + (rating - 8.5) * 0.08
         
-        amenity_add = sum(REAL_AMENITY_VALUATIONS_INR.get(a, 500.0) for a in selected_amenities)
-        
-        true_price = (base_inr * guest_scale * seasonal_mult * weekend_mult * rating_mult) + amenity_add
-        noise = np.random.normal(0, true_price * 0.05) # 5% realistic variance
-        final_price = round(max(800.0, true_price + noise), 0)
+        true_base = base_inr * guest_scale * seasonal_mult * weekend_mult * rating_mult
+        noise = np.random.normal(0, true_base * 0.03)
+        final_base = round(max(800.0, true_base + noise), 0)
         
         records.append({
             "location": location,
@@ -171,8 +160,7 @@ def build_training_dataset(real_homes, n_augmented: int = 8000) -> pd.DataFrame:
             "rating": rating,
             "month": month,
             "is_weekend": is_weekend,
-            "amenities": amenities_str,
-            "price": final_price
+            "base_price": final_base
         })
         
     return pd.DataFrame(records)
@@ -185,11 +173,11 @@ def train_and_export():
     except Exception:
         real_homes = []
         
-    print("[2/5] Building INR pricing dataset grounded in real database baselines...")
+    print("[2/5] Building INR base pricing dataset grounded in real database baselines...")
     df = build_training_dataset(real_homes, n_augmented=10000)
     
-    X = df.drop(columns=["price"])
-    y = df["price"]
+    X = df.drop(columns=["base_price"])
+    y = df["base_price"]
     
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
@@ -200,17 +188,16 @@ def train_and_export():
     preprocessor = ColumnTransformer(
         transformers=[
             ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), categorical_features),
-            ("num", StandardScaler(), numeric_features),
-            ("amenities", CountVectorizer(tokenizer=split_amenities, token_pattern=None, binary=True), "amenities")
+            ("num", StandardScaler(), numeric_features)
         ]
     )
     
     model = Pipeline(steps=[
         ("preprocessor", preprocessor),
-        ("regressor", RandomForestRegressor(n_estimators=140, max_depth=20, min_samples_split=4, random_state=42, n_jobs=-1))
+        ("regressor", RandomForestRegressor(n_estimators=100, max_depth=16, min_samples_split=4, random_state=42, n_jobs=-1))
     ])
     
-    print("[4/5] Training Random Forest Regressor on INR pricing data...")
+    print("[4/5] Training Random Forest Regressor on INR base pricing data...")
     model.fit(X_train, y_train)
     
     y_pred = model.predict(X_test)

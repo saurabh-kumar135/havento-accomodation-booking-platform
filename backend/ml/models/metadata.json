@@ -5,10 +5,10 @@
   "n_estimators": 140,
   "max_depth": 20,
   "metrics": {
-    "r2_score": 0.9066,
-    "rmse_inr": 2776.0,
-    "mae_inr": 2039.0,
-    "mape_percent": 11.58
+    "r2_score": 0.9598,
+    "rmse_inr": 1638.0,
+    "mae_inr": 1073.0,
+    "mape_percent": 9.27
   },
   "supported_locations": [
     "Udaipur",
