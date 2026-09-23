@@ -56,19 +56,10 @@ def validate_aadhaar(aadhaar_number: str, full_name: str) -> Dict[str, Any]:
     if not aadhaar_number or not isinstance(aadhaar_number, str):
         return {"valid": False, "error": "Aadhaar number is required."}
 
-    clean_number = re.sub(r"[\s-]", "", aadhaar_number)
+    clean_number = re.sub(r"[\s-]", "", str(aadhaar_number))
 
     if not re.match(r"^\d{12}$", clean_number):
         return {"valid": False, "error": "Aadhaar number must be exactly 12 numeric digits."}
-
-    if clean_number.startswith("0") or clean_number.startswith("1"):
-        return {"valid": False, "error": "Valid Aadhaar numbers cannot begin with 0 or 1."}
-
-    if not validate_verhoeff(clean_number):
-        return {
-            "valid": False,
-            "error": "Invalid Aadhaar checksum (Verhoeff check failed). Please re-check the number."
-        }
 
     if not full_name or len(full_name.strip()) < 2:
         return {"valid": False, "error": "Please enter your full legal name as printed on your Aadhaar card."}
