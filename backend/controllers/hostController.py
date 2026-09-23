@@ -223,6 +223,7 @@ async def post_verify_kyc(req: KycVerificationRequest, user: User = Depends(get_
     user.hostKyc = HostKyc(
         isVerified=True,
         documentType=verification["document_type"],
+        documentNumber=verification["document_number"],
         maskedNumber=verification["masked_number"],
         documentHash=verification["document_hash"],
         fullNameAsOnDoc=verification["full_name_as_on_doc"],

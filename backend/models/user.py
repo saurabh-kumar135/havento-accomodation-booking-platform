@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, EmailStr
 class HostKyc(BaseModel):
     isVerified: bool = False
     documentType: Optional[str] = None
+    documentNumber: Optional[str] = None
     maskedNumber: Optional[str] = None
     documentHash: Optional[str] = None
     fullNameAsOnDoc: Optional[str] = None

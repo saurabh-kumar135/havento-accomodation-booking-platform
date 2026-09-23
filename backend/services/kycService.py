@@ -144,6 +144,7 @@ async def verify_host_identity(document_type: str, document_number: str, full_na
         return {
             "success": True,
             "document_type": "aadhaar",
+            "document_number": result["clean_number"],
             "masked_number": result["masked_number"],
             "document_hash": result["document_hash"],
             "full_name_as_on_doc": result["full_name"],
@@ -157,6 +158,7 @@ async def verify_host_identity(document_type: str, document_number: str, full_na
         return {
             "success": True,
             "document_type": "pan",
+            "document_number": result["clean_number"],
             "masked_number": result["masked_number"],
             "document_hash": result["document_hash"],
             "full_name_as_on_doc": result["full_name"],
