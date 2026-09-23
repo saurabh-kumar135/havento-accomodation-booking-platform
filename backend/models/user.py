@@ -7,6 +7,8 @@ class HostKyc(BaseModel):
     isVerified: bool = False
     documentType: Optional[str] = None
     documentNumber: Optional[str] = None
+    aadharNumber: Optional[str] = None
+    aadhaarNumber: Optional[str] = None
     maskedNumber: Optional[str] = None
     documentHash: Optional[str] = None
     fullNameAsOnDoc: Optional[str] = None
@@ -30,6 +32,8 @@ class User(Document):
     goals: str = ""
     onboarded: bool = False
     role: str = "other"
+    aadharNumber: Optional[str] = None
+    aadhaarNumber: Optional[str] = None
     hostKyc: Optional[HostKyc] = Field(default_factory=HostKyc)
     createdAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updatedAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

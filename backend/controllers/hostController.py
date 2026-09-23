@@ -220,10 +220,19 @@ async def post_verify_kyc(req: KycVerificationRequest, user: User = Depends(get_
             detail=verification.get("error", "Verification failed.")
         )
     
+    doc_num = verification.get("document_number")
+    is_aadhaar = verification.get("document_type") == "aadhaar"
+    
+    if is_aadhaar and doc_num:
+        user.aadharNumber = doc_num
+        user.aadhaarNumber = doc_num
+
     user.hostKyc = HostKyc(
         isVerified=True,
         documentType=verification["document_type"],
-        documentNumber=verification["document_number"],
+        documentNumber=doc_num,
+        aadharNumber=doc_num if is_aadhaar else None,
+        aadhaarNumber=doc_num if is_aadhaar else None,
         maskedNumber=verification["masked_number"],
         documentHash=verification["document_hash"],
         fullNameAsOnDoc=verification["full_name_as_on_doc"],
