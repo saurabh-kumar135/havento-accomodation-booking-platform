@@ -18,6 +18,7 @@ import Bookings from './pages/store/Bookings';
 import AddEditHome from './pages/host/AddEditHome';
 import HostHomeList from './pages/host/HostHomeList';
 import PricingIntelligence from './pages/host/PricingIntelligence';
+import HostWealthDashboard from './pages/host/HostWealthDashboard';
 
 import NotFound from './pages/NotFound';
 import AIChatWidget from './components/AIChatWidget';
@@ -68,6 +69,11 @@ function App() {
               <Route path="/host/host-home-list" element={
                 <ProtectedRoute>
                   <HostHomeList />
+                </ProtectedRoute>
+              } />
+              <Route path="/host/wealth" element={
+                <ProtectedRoute>
+                  <HostWealthDashboard />
                 </ProtectedRoute>
               } />
               <Route path="/host/pricing-intelligence" element={

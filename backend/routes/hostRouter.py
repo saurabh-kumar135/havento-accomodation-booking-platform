@@ -22,3 +22,6 @@ router.add_api_route("/delete-home/{home_id}", hostController.delete_home, metho
 # KYC Identity Verification (Aadhaar & PAN)
 router.add_api_route("/verify-kyc", hostController.post_verify_kyc, methods=["POST"])
 router.add_api_route("/kyc-status", hostController.get_kyc_status, methods=["GET"])
+
+# Host Wealth & Revenue Analytics
+router.add_api_route("/wealth-analytics", hostController.get_host_wealth_analytics, methods=["GET"])

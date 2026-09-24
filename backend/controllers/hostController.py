@@ -1,16 +1,18 @@
 import os
 import uuid
 import logging
+from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel
 from fastapi import HTTPException, status, Depends, UploadFile, File, Form
 from beanie import PydanticObjectId
+from beanie.operators import Or, In
 import aiofiles
 from config import settings
 from models.home import Home
 from models.user import User, HostKyc
 from models.booking import Booking
-from middleware.auth import get_current_user
+from middleware.auth import get_current_user, get_current_user_optional
 from controllers.storeController import serialize_home, serialize_booking
 from services.kycService import verify_host_identity
 
@@ -256,3 +258,166 @@ async def get_kyc_status(user: User = Depends(get_current_user)):
         "hostKyc": user.hostKyc.model_dump() if user.hostKyc else {"isVerified": False, "status": "unverified"},
         "userType": user.userType
     }
+
+async def get_host_wealth_analytics(user: Optional[User] = Depends(get_current_user_optional)):
+    user_homes = []
+    if user:
+        try:
+            from bson.objectid import ObjectId
+            u_oid = ObjectId(str(user.id))
+            user_homes = await Home.find(Or(Home.host == user.id, Home.host == u_oid)).to_list()
+        except Exception:
+            user_homes = await Home.find(Home.host == user.id).to_list()
+            
+    is_demo = len(user_homes) == 0
+    all_homes = await Home.find().limit(6).to_list()
+    target_homes = user_homes if user_homes else all_homes
+    target_ids_set = {str(h.id) for h in target_homes}
+    
+    all_bookings = await Booking.find().sort("-createdAt").to_list()
+    relevant_bookings = [
+        b for b in all_bookings
+        if str(getattr(b, "home", "") or getattr(b, "homeId", "") or "") in target_ids_set
+    ]
+    confirmed_bookings = [b for b in relevant_bookings if b.status != "cancelled"]
+    
+    # Pre-fetch guest users for displaying real guest names
+    guest_uids = []
+    for b in confirmed_bookings:
+        u_val = getattr(b, "user", None) or getattr(b, "userId", None)
+        if u_val:
+            guest_uids.append(u_val)
+    guest_map = {}
+    if guest_uids:
+        try:
+            guest_users = await User.find(In(User.id, guest_uids)).to_list()
+            for gu in guest_users:
+                g_name = f"{gu.firstName} {gu.lastName}".strip() or gu.email
+                guest_map[str(gu.id)] = g_name
+        except Exception:
+            pass
+
+    homes_dict = {str(h.id): h for h in target_homes}
+    
+    total_gross = 0.0
+    total_nights = 0
+    serialized_bookings = []
+    
+    for b in confirmed_bookings:
+        h_key = str(getattr(b, "home", "") or getattr(b, "homeId", "") or "")
+        h = homes_dict.get(h_key)
+        price_per_night = float(h.price) if h and hasattr(h, "price") else 5000.0
+        
+        nights = 2
+        if b.checkIn and b.checkOut:
+            try:
+                cin = b.checkIn if isinstance(b.checkIn, datetime) else datetime.fromisoformat(str(b.checkIn).replace('Z', '+00:00'))
+                cout = b.checkOut if isinstance(b.checkOut, datetime) else datetime.fromisoformat(str(b.checkOut).replace('Z', '+00:00'))
+                diff = (cout - cin).days
+                if diff > 0:
+                    nights = diff
+            except Exception:
+                nights = 2
+                
+        booking_revenue = float(b.totalPrice or 0.0)
+        if booking_revenue <= 0.0:
+            booking_revenue = price_per_night * nights
+            
+        total_gross += booking_revenue
+        total_nights += nights
+        
+        b_user_key = str(getattr(b, "user", "") or getattr(b, "userId", "") or "")
+        guest_name = guest_map.get(b_user_key, "Guest")
+        
+        cin_str = str(b.checkIn).split("T")[0] if b.checkIn else ""
+        cout_str = str(b.checkOut).split("T")[0] if b.checkOut else ""
+        
+        serialized_bookings.append({
+            "id": str(b.id),
+            "homeId": h_key,
+            "houseName": h.houseName if h else "Haven Property",
+            "location": h.location if h else "India",
+            "nights": nights,
+            "guests": getattr(b, "guests", 1),
+            "guestName": guest_name,
+            "checkIn": cin_str,
+            "checkOut": cout_str,
+            "totalPrice": booking_revenue,
+            "netPayout": round(booking_revenue * 0.97, 0),
+            "status": b.status,
+            "createdAt": b.createdAt.isoformat() if hasattr(b.createdAt, "isoformat") else str(b.createdAt)
+        })
+        
+    platform_fee_percent = 3
+    net_payout = round(total_gross * (1.0 - platform_fee_percent / 100.0), 0)
+    avg_stay = round(total_nights / max(1, len(confirmed_bookings)), 1)
+    avg_val = round(total_gross / max(1, len(confirmed_bookings)), 0)
+    
+    homes_breakdown = []
+    for h in target_homes:
+        h_bookings = [
+            b for b in confirmed_bookings
+            if str(getattr(b, "home", "") or getattr(b, "homeId", "") or "") == str(h.id)
+        ]
+        h_revenue = 0.0
+        h_nights = 0
+        for b in h_bookings:
+            nights = 2
+            if b.checkIn and b.checkOut:
+                try:
+                    cin = b.checkIn if isinstance(b.checkIn, datetime) else datetime.fromisoformat(str(b.checkIn).replace('Z', '+00:00'))
+                    cout = b.checkOut if isinstance(b.checkOut, datetime) else datetime.fromisoformat(str(b.checkOut).replace('Z', '+00:00'))
+                    diff = (cout - cin).days
+                    if diff > 0:
+                        nights = diff
+                except Exception:
+                    nights = 2
+            b_rev = float(b.totalPrice or 0.0)
+            if b_rev <= 0.0:
+                b_rev = float(h.price) * nights
+            h_revenue += b_rev
+            h_nights += nights
+            
+        homes_breakdown.append({
+            "homeId": str(h.id),
+            "houseName": h.houseName,
+            "location": h.location,
+            "nightlyPrice": float(h.price),
+            "photoUrl": getattr(h, "photo", None) or getattr(h, "photoUrl", None) or (h.photos[0] if getattr(h, "photos", None) else ""),
+            "bookingsCount": len(h_bookings),
+            "nightsBooked": h_nights,
+            "grossRevenue": round(h_revenue, 0),
+            "netEarnings": round(h_revenue * 0.97, 0)
+        })
+        
+    flagship_rate = float(target_homes[0].price) if target_homes else 8000.0
+    mohan_benchmark = {
+        "scenarioName": "Mohan's 10-Guest 2-Night Model",
+        "sampleGuests": 10,
+        "sampleNights": 2,
+        "sampleNightlyRate": flagship_rate,
+        "projectedGross": round(10 * 2 * flagship_rate, 0),
+        "projectedNet": round(10 * 2 * flagship_rate * 0.97, 0)
+    }
+    
+    return {
+        "success": True,
+        "isDemoPortfolio": is_demo,
+        "hostName": getattr(user, "firstName", None) or getattr(user, "email", "Mohan (Host)"),
+        "currency": "INR",
+        "currencySymbol": "₹",
+        "summary": {
+            "totalListings": len(target_homes),
+            "totalBookings": len(confirmed_bookings),
+            "totalNightsBooked": total_nights,
+            "avgStayDuration": avg_stay,
+            "totalGrossRevenue": round(total_gross, 0),
+            "netPayout": net_payout,
+            "platformFeePercent": platform_fee_percent,
+            "avgBookingValue": avg_val
+        },
+        "homesBreakdown": homes_breakdown,
+        "recentBookings": serialized_bookings[:10],
+        "mohanBenchmark": mohan_benchmark
+    }
+

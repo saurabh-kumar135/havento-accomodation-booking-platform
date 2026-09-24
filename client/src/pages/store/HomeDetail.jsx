@@ -65,11 +65,9 @@ const HomeDetail = () => {
       try {
         const response = await removeFromFavourite(homeId);
         if (response.data.success) {
-          if (response.data.favourites) {
-            updateFavourites(response.data.favourites);
-          } else if (user?.favourites) {
-            updateFavourites(user.favourites.filter((f) => String(f) !== String(homeId)));
-          }
+          const currentFavs = (user?.favourites || []).map((f) => String(f?._id || f));
+          const updatedFavs = response.data.favourites || currentFavs.filter((f) => f !== String(homeId));
+          updateFavourites(updatedFavs);
           showToast('Removed from favourites', 'info');
         }
       } catch (error) {
@@ -85,11 +83,9 @@ const HomeDetail = () => {
       try {
         const response = await addToFavourite(homeId);
         if (response.data.success) {
-          if (response.data.favourites) {
-            updateFavourites(response.data.favourites);
-          } else if (user?.favourites) {
-            updateFavourites([...user.favourites, String(homeId)]);
-          }
+          const currentFavs = (user?.favourites || []).map((f) => String(f?._id || f));
+          const updatedFavs = response.data.favourites || [...new Set([...currentFavs, String(homeId)])];
+          updateFavourites(updatedFavs);
           showToast('Saved to your favourites! ❤️', 'success');
         }
       } catch (error) {
@@ -417,6 +413,14 @@ const HomeDetail = () => {
                   {home.rating} / 10
                 </span>
               </div>
+              {home.hostId?.hostKyc?.isVerified && (
+                <div className="mt-3 inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 text-gray-700 rounded-lg text-xs font-medium">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-blue-600" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  </svg>
+                  <span>Identity verified</span>
+                </div>
+              )}
             </div>
 
             <div className="border-b pb-6">
