@@ -1,6 +1,22 @@
 {
   "rewrites": [
     {
+      "source": "/api/(.*)",
+      "destination": "https://havento.duckdns.org/api/$1"
+    },
+    {
+      "source": "/uploads/(.*)",
+      "destination": "https://havento.duckdns.org/uploads/$1"
+    },
+    {
+      "source": "/host/uploads/(.*)",
+      "destination": "https://havento.duckdns.org/host/uploads/$1"
+    },
+    {
+      "source": "/homes/uploads/(.*)",
+      "destination": "https://havento.duckdns.org/homes/uploads/$1"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }
